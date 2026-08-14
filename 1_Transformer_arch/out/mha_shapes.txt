@@ -1,0 +1,14 @@
+Input x:                              (1, 5, 16) = (B, T, d_model)
+Linear qkv(x)                         (1, 5, 48) = (B, T, 3*d_model)
+View to 5D:                           (1, 5, 3, 4, 4) = (B, T, 3, heads, d_head)
+q, k, v split:                        q = (1, 5, 4, 4) k = (1, 5, 4, 4) v = (1, 5, 4, 4)
+Transpose heads:                       q = (1, 4, 5, 4) k = (1, 4, 5, 4) v = (1, 4, 5, 4)
+Scores q@k^T                          (1, 4, 5, 5) = (B, heads, T, T)
+Softmax(weights):                     (1, 4, 5, 5) = (B, heads, T, T)
+Context @v:                           (1, 4, 5, 4) = (B, heads, T, d_head)
+Merge heads:                          (1, 5, 16) = (B, T, d_model)
+Final proj:                           (1, 5, 16) = (B, T, d_model)
+
+Legend: 
+  B=batch, T=sequence length, d_model=embedding size, heads=n_head, d_head=d_model/heads
+  qkv(x) is a single Linear producing [Q|K|V]; we reshape then split into q,k,v
