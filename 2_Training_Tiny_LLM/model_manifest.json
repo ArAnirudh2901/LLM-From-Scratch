@@ -1,0 +1,34 @@
+{
+ "runs/clutrr-qa-v8/best.pt": {
+  "bytes": 52084171,
+  "sha256": "1e7c9eeb4325d328aad6b97ad9c7532fda77e713eeb7a303d34600cfe46ecc3e"
+ },
+ "runs/name-tagger-v4/tagger.pt": {
+  "bytes": 20564073,
+  "sha256": "902cf140304f9306db8e73d83f90f60ef253a249f1e8e99c368117a438652805"
+ },
+ "web/model/qa.bin": {
+  "bytes": 52018176,
+  "sha256": "3b0997206ddd3968df779cf3352cc297d2a9a1034abe39658c616e9470cc2ae5"
+ },
+ "web/model/qa.bin.gz": {
+  "bytes": 44162274,
+  "sha256": "ea277cc98b5138fc189c93571ff64e03bee6a3ed13a882700c4b3ac9f8f92c51"
+ },
+ "web/model/qa.json": {
+  "bytes": 31537,
+  "sha256": "e1ae7af14dde63551186cc8af81b73381516d5b2047c56e87170bd76ba222a46"
+ },
+ "web/model/tagger.bin": {
+  "bytes": 20492288,
+  "sha256": "3dd661a9a0801c4efbbfb2bec2a5b73e78039450e6fb57f47e110156478e9a35"
+ },
+ "web/model/tagger.bin.gz": {
+  "bytes": 17162267,
+  "sha256": "1f0171fe0e0d62a80fd9e0269da635ba6a9a812772107bc7188005c935bba2f3"
+ },
+ "web/model/tagger.json": {
+  "bytes": 37101,
+  "sha256": "7be006785b67c08e234254c993cd1a8663f847dd49a73fd71d790f058263ac32"
+ }
+}

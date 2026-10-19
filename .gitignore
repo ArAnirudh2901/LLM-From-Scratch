@@ -49,3 +49,9 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Kinship QA: dataset and exported weights (too big for git; verify copies with verify_model.py)
+2_Training_Tiny_LLM/data/
+2_Training_Tiny_LLM/web/model/*.gz
+2_Training_Tiny_LLM/web/test/calib.json
+2_Training_Tiny_LLM/web/test/result.txt

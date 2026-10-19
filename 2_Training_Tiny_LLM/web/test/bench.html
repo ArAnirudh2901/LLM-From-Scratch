@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>kinship engine test</title>
+<pre id="out">running…</pre>
+<script type="module">
+// Test page only: same checks as test_node.mjs, in a real browser. ?engines=auto,relaxed,simd,scalar&n=100
+import { KinshipQA } from '../kinship.js';
+const q = new URLSearchParams(location.search), log = [];
+const say = (s) => { log.push(s); document.getElementById('out').textContent = log.join('\n'); };
+try {
+  for (const engine of (q.get('engines') || 'auto').split(',')) {
+  const t0 = performance.now();
+  const qa = await KinshipQA.load({ base: '../model/', engine });
+  say(`[${engine}] load ${(performance.now() - t0).toFixed(0)} ms | engine ${qa.engine}, tile ${qa.tile}, threads ${qa.threads} | isolated ${crossOriginIsolated} | cores ${navigator.hardwareConcurrency} | ${navigator.userAgent.match(/Chrome\/[\d.]+/)}`);
+  const golden = await (await fetch('golden.json')).json();
+  let d = 0;
+  for (const g of golden.forward) {
+    const n = g.ids.length, s = g.ids.map((_, j) => j);
+    const lg = qa.qa.logits(qa.qa.forward(g.ids, s, s, s.map((j) => s.slice(0, j + 1))).subarray((n - 1) * qa.qa.C), 1);
+    g.logits.forEach((x, i) => { d = Math.max(d, Math.abs(x - lg[i])); });
+  }
+  let same = 0;
+  for (const g of golden.search) same += qa.predict(g, { views: 1, adaptive: null, beam: 8 }).relation === g.pred;
+  let tag = 0;
+  for (const g of golden.tagger) tag += JSON.stringify(qa.findNames(g.text)) === JSON.stringify(g.names);
+  say(`exactness: max logit diff ${d.toExponential(1)} | search ${same}/${golden.search.length} | tagger ${tag}/${golden.tagger.length}`);
+  const n = +(q.get('n') || 100), opt = { beam: +(q.get('beam') || 4), views: +(q.get('views') || 1), adaptive: null };
+  const qs = Object.values(golden.sweep).flatMap((x) => x.slice(0, n / 5));
+  qa.predict(qs[0], opt);   // warm-up
+  const t = [];
+  for (const g of qs) { const a = performance.now(); qa.predict(g, opt); t.push(performance.now() - a); }
+  t.sort((a, b) => a - b);
+  say(`speed (${qs.length} questions, beam ${opt.beam}, views ${opt.views}): median ${t[t.length >> 1].toFixed(0)} ms, p90 ${t[Math.floor(t.length * 0.9)].toFixed(0)} ms`);
+  const r = qa.ask("Ashley's daughter, Lillian, asked her mom to read her a story. Nicholas's sister Lillian asked him for some help.", 'Ashley', 'Nicholas');
+  say(`ask(): ${r.text} [${r.ms.toFixed(0)} ms]`);
+  }
+  say('DONE');
+} catch (e) { say(`ERROR ${e.stack || e}`); }
+fetch('/result', { method: 'POST', body: log.join('\n') });
+</script>

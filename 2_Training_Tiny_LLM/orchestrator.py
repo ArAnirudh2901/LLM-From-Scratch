@@ -42,7 +42,10 @@ def get_hardware_config() -> dict:
         "n_head": 6,
         "n_embd": 384,
         "steps": 4000,
+        "dropout": 0.1,
     }
+    # MPS shares system RAM: batch 64 peaks ~4.2 GB, batch 32 ~2.2 GB (8 GB M-series, measured)
+    mps_config = {**gpu_config, "batch_size": 32}
     cpu_config = {
         "batch_size": 16,
         "block_size": 128,
@@ -50,27 +53,32 @@ def get_hardware_config() -> dict:
         "n_head": 4,
         "n_embd": 256,
         "steps": 1000,
+        "dropout": 0.1,
     }
 
-    # Unified PyTorch Accelerator API (PyTorch 2.6+)
+    # Unified PyTorch Accelerator API (PyTorch 2.6+), else explicit backend checks
+    acc_type = None
     if hasattr(torch, "accelerator") and torch.accelerator.is_available():
         acc_type = torch.accelerator.current_accelerator().type
-        print(f"[Orchestrator] Detected Accelerator Backend: {acc_type.upper()}")
-        return gpu_config
+    elif torch.cuda.is_available():
+        acc_type = "cuda"
+    elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        acc_type = "mps"
+    elif getattr(torch, "xpu", None) and torch.xpu.is_available():
+        acc_type = "xpu"
 
-    # Explicit Backend Checks
-    if torch.cuda.is_available():
+    if acc_type == "cuda":
         vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         dev_name = torch.cuda.get_device_name(0)
         print(f"[Orchestrator] Detected CUDA GPU: {dev_name} ({vram_gb:.1f} GB VRAM)")
         if vram_gb >= 16:
             return {**gpu_config, "batch_size": 128, "steps": 5000}
         return gpu_config
-    elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+    elif acc_type == "mps":
         print("[Orchestrator] Detected Apple Silicon GPU (MPS)")
-        return gpu_config
-    elif getattr(torch, "xpu", None) and torch.xpu.is_available():
-        print("[Orchestrator] Detected Intel XPU GPU")
+        return mps_config
+    elif acc_type is not None:
+        print(f"[Orchestrator] Detected Accelerator Backend: {acc_type.upper()}")
         return gpu_config
 
     print("[Orchestrator] CPU Mode: Using lightweight configuration for fast execution")
@@ -82,6 +90,7 @@ if __name__ == '__main__':
         f"{sys.executable} train.py --data data/clutrr.txt "
         f"--steps {cfg['steps']} --sample_every 400 --eval_interval 400 "
         f"--batch_size {cfg['batch_size']} --block_size {cfg['block_size']} "
-        f"--n_layer {cfg['n_layer']} --n_head {cfg['n_head']} --n_embd {cfg['n_embd']} --lr 5e-4"
+        f"--n_layer {cfg['n_layer']} --n_head {cfg['n_head']} --n_embd {cfg['n_embd']} "
+        f"--dropout {cfg['dropout']} --lr 5e-4"
     )
     run(cmd)
