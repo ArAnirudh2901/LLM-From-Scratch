@@ -62,3 +62,6 @@ Python with torch: `.venv/bin/python` in this repo (needs pandas + pyarrow for t
 - 2026-10-20: website renamed Kinthread; exam-style input handled on the website side. `main` fast-forwarded to
   include the kinship project; Kinthread-llm-model created (subtree + checkpoints + data + exported model); all
   history rewritten so only ArAnirudh2901 is a contributor.
+- 2026-10-20: no model changes. Kinthread (website) now ships a neural-network-cone loader driven by an exact
+  progress follower, resumable downloads, share links and contradiction checks; its `vendor/kinship/` equals
+  `2_Training_Tiny_LLM/web` here (SHA-256 manifest).
