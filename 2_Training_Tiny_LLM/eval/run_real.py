@@ -1,0 +1,79 @@
+"""Scores a reader on scraped real exam questions (data/real_questions, private): right option, or answer text.
+
+    python -m eval.run_real --ckpt runs/reader-v9/best.pt [--out results.json]
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import glob
+import json
+import re
+
+from kinlogic.exam import _relation_option, answer, option_moves
+from kinlogic.explain import match_option
+
+
+def load_real(pattern='data/real_questions/*.jsonl'):
+    rows = []
+    for f in sorted(glob.glob(pattern)):
+        for line in open(f):
+            r = json.loads(line)
+            if r.get('url', '').lower().endswith('.pdf'):   # page breaks scramble PDF questions
+                continue
+            r['options'] = [[l, re.sub(r'^\s*\(?[A-Ea-e1-5][).]\s+', '', t)] for l, t in r.get('options') or []]
+            rows.append(r)
+    return rows
+
+
+def as_text(r):
+    opts = ' '.join(f'({l}) {t}' for l, t in r['options'])
+    return f"{r['question']} {opts}".strip()
+
+
+def correct(r, res):
+    if r.get('answer') and r['options']:
+        return res['option'] == r['answer']
+    want = r.get('answer_text') or ''
+    got = res.get('answer') or ''
+    if not want or not got:
+        return False
+    if match_option(got, [('x', want)]) or match_option(want, [('x', got)]):
+        return True
+    mv_w, mv_g = option_moves(re.sub(r"^.*?\bis\s+\w+'s\s+", '', want)), option_moves(got)
+    return bool(mv_w and mv_g and [m for m, _ in mv_w] == [m for m, _ in mv_g])
+
+
+def run(read, rows):
+    by = collections.defaultdict(lambda: [0, 0])
+    misses = []
+    for r in rows:
+        res = answer(as_text(r), read)
+        ok = correct(r, res)
+        k = by[r['site']]
+        k[0] += ok; k[1] += 1
+        if not ok:
+            misses.append({'site': r['site'], 'q': r['question'][:300], 'want': r.get('answer') or r.get('answer_text'),
+                           'got': res.get('option') or res.get('answer'), 'facts': res.get('facts', '')})
+    total = [sum(v[i] for v in by.values()) for i in range(2)]
+    return {'real_acc': total[0] / max(1, total[1]), 'n': total[1],
+            'by_site': {k: f'{a}/{b}' for k, (a, b) in sorted(by.items())}}, misses
+
+
+if __name__ == '__main__':
+    import torch
+    from eval.evaluate import load
+    from reader import generate
+    from train import get_device
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--ckpt', required=True)
+    ap.add_argument('--cpu', action='store_true')
+    ap.add_argument('--out', default=None)
+    a = ap.parse_args()
+    dev = get_device(force_cpu=a.cpu)
+    model, vocab = load(a.ckpt, dev)
+    rows = load_real()
+    score, misses = run(lambda b: generate(model, vocab, b, dev, k=4), rows)
+    print(json.dumps(score, indent=1))
+    if a.out:
+        json.dump({'score': score, 'misses': misses}, open(a.out, 'w'), indent=1)

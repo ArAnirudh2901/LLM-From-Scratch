@@ -250,8 +250,11 @@ def _answer_one(p, lf, read, priors):
 def _claims(stmts, options, low, people, priors):
     r = solve(stmts, people=people, priors=priors)
     verdicts = r['claims']
-    want = 'false' if re.search(r'\bfalse\b|not true|incorrect', low) else 'true'
-    hits = {k for k, v in verdicts.items() if v == want}
+    if re.search(r"cannot be (?:definitely )?true|can.?t be (?:definitely )?true|not (?:definitely|necessarily) true", low):
+        want, hits = 'not definitely true', {k for k, v in verdicts.items() if v != 'true'}
+    else:
+        want = 'false' if re.search(r'\bfalse\b|not true|incorrect', low) else 'true'
+        hits = {k for k, v in verdicts.items() if v == want}
     ans = f"{len(hits)} statement{'s' if len(hits) != 1 else ''} {want}: " + (', '.join(str(k) for k in sorted(hits)) or 'none')
     lab = None
     if 'how many' in low:

@@ -57,6 +57,7 @@ into family facts; the **engine** (`kinlogic/`, pure Python, exact) builds every
 | `reader.py`, `train_reader.py` | vocab, encoding, cached constrained greedy/beam/sampling; supervised training (fp16 on CUDA, resume, eval) |
 | `train_rl.py` | GRPO after supervised training: 8 sampled readings per question, engine-scored reward, KL to the supervised model |
 | `eval/` | `exam_set.py` (hand-written, never trained on), `evaluate.py` (exam, CLUTRR test, RiddleBench, generated) |
+| `eval/scrape_real.py`, `eval/run_real.py` | real exam questions from sites whose robots.txt allows it (IndiaBix, Examveda, prep articles); kept in git-ignored `data/real_questions/`, evaluation only, never training text |
 | `colab/train_reader_colab.ipynb` | free-T4 training: clones branch `v9-reader` of Kinthread-llm-model |
 
 Tests: `.venv/bin/python -m pytest 2_Training_Tiny_LLM/tests -q` (run from `2_Training_Tiny_LLM`). With gold facts the
@@ -90,3 +91,4 @@ Python with torch: `.venv/bin/python` in this repo (needs pandas + pyarrow for t
   `2_Training_Tiny_LLM/web` here (SHA-256 manifest).
 - 2026-10-21: v9 pipeline built (kinlogic engine, generator, reader training, eval, Colab notebook); not trained yet.
 - 2026-10-21: audit fixes: RiddleBench 'A.V | B.O' options when the text starts with 'A family'; generations check with unlinked groups; puzzle member list vs stray placeholders; pair and data-sufficiency answers in eval/RL rewards; lexicon coverage test (rebuild with `python -m kinlogic.lexicon` after generator changes); new generated forms (addressee 'your', 'said to her husband', 'this man's', relative clauses, plural children, elder/younger); readings vote by confidence; exam set split dev/test (only dev guides choices).
+- 2026-10-21: 263 real scraped questions (evaluation only). CPU check model (1% of planned training): 90% on generated questions, 24% on real ones; gaps found (missing words, 'A, B and C are sisters', 'cannot be definitely true') added to the generator.

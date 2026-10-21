@@ -254,6 +254,10 @@ class Q:
     def finish(self, kind: str, options=None, extra=None) -> dict | None:
         rng = self.rng
         text = ' '.join(s.strip() for s in self.sentences if s.strip())
+        if rng.random() < 0.12:   # real questions drop words: "the son of only son my grandfather"
+            import re
+            text = re.sub(r'\b(the|of) (?!man\b|woman\b|boy\b|girl\b|lady\b|gentleman\b|person\b)',
+                          lambda m: '' if rng.random() < 0.25 else m.group(0), text)
         if rng.random() < 0.12:
             text = rng.choice(['Question {n}: ', 'Q{n}. ', 'Blood Relations Question {n}: ', 'Question {n}. ',
                                'Directions: Study the following information carefully and answer the question given below. ',
@@ -470,6 +474,14 @@ def q_statements(rng) -> dict | None:
         rx, ry = q.ref(x), q.ref(y)
         clauses.append((state(rng, rx.surface, ry.surface, word, side), [F(rx, word, ry, side)]))
     w = fam.w
+    for x in [r.node for r in list(q.refs.values())]:   # "A, B and C are sisters": each is the next one's sister
+        sibs = [x] + [z for z in w.siblings(x) if fam.g(z) == fam.g(x)]
+        if len(sibs) >= 3 and rng.random() < 0.25:
+            rs_ = [q.ref(z) for z in sibs[:4]]
+            word = 'brother' if fam.g(x) == 'M' else 'sister'
+            clauses.append((f'{_listing(rng, [r.surface for r in rs_])} are {PLURAL[word]}',
+                            [F(rs_[i], word, rs_[(i + 1) % len(rs_)]) for i in range(len(rs_))]))
+            break
     for x in [r.node for r in list(q.refs.values())]:   # "X has two sons, Y and Z" / "Y and Z are the parents of X"
         if rng.random() < 0.12:
             for word in ('son', 'daughter'):
@@ -1140,7 +1152,7 @@ def q_claims(rng) -> dict | None:
         return None
     q.add(rng.choice(['Which of the following statements is definitely true?', 'How many of the following statements are definitely true?',
                       'Which of the following is/are true?', 'Which of the following statements is false?',
-                      'Which of the following can be concluded?']))
+                      'Which of the following can be concluded?', 'Which of the following statements cannot be definitely true?']))
     for n, (t, fs) in enumerate(claims, 1):
         q.add(f'{ROMAN[n - 1]}. {cap(t)}.', [{'t': 'claim', 'n': n}] + fs)
     opts = rng.sample(['Only I', 'Only II', 'Only I and II', 'Only II and III', 'All of these', 'None of these', 'Only III', 'One', 'Two', 'Three'], 4)

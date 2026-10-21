@@ -50,9 +50,27 @@ def words_from_clutrr(data_dir='data/clutrr_v1') -> set[str]:
 
 KINDS = {k[2:]: getattr(gen, k) for k in dir(gen) if k.startswith('q_')}
 
+
+def fixed_words() -> set[str]:
+    """Every word in the generator's fixed lists (templates, Hindi words, ages...), however rarely sampled."""
+    out = set()
+
+    def walk(v):
+        if isinstance(v, str):
+            out.update(w.lower() for w in TOKEN_RE.findall(v) if len(w) > 1 and w[0].isalpha() and '{' not in w)
+        elif isinstance(v, dict):
+            for x in list(v.keys()) + list(v.values()):
+                walk(x)
+        elif isinstance(v, (list, tuple, set)):
+            for x in v:
+                walk(x)
+    for name in ('HINDI', 'STORY', 'FRIENDLY', 'TRAVEL', 'SPEECH_OPEN', 'AGE', 'CODE_WORDS', 'PLURAL', 'NUM', 'WORDS', 'HEADS'):
+        walk(getattr(gen, name, None))
+    return out - {p.lower() for p in gen.PLACES}
+
 if __name__ == '__main__':
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 20000
-    words = words_from_generator(n) | words_from_clutrr()
+    words = words_from_generator(n) | words_from_clutrr() | fixed_words()
     words = {w for w in words if re.fullmatch(r"[a-z][a-z'-]*", w) and w not in NAMES}
     words |= {'i', 'ii', 'iii', 'iv', 'v', 'vi'}
     OUT.write_text('\n'.join(sorted(words)) + '\n')
