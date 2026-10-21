@@ -51,7 +51,20 @@ for _k in range(1, 4):
     KIN[f'{_great}grandchild'] = [[*_downs, D()]]
 
 # Words that take "only" ("the only son of"): the person is the one such relative.
-ONLY = {'son', 'daughter', 'child', 'brother', 'sister', 'sibling'}
+# A claim to check ("J is the aunt of M") also holds for relatives by marriage; facts read from a text stay blood.
+BY_MARRIAGE = {'uncle': [[Step('U', None), Step('B', 'F'), Step('S', 'M')]],
+               'aunt': [[Step('U', None), Step('B', 'M'), Step('S', 'F')]],
+               'nephew': [[Step('S', None), Step('B', None), Step('D', 'M')]],
+               'niece': [[Step('S', None), Step('B', None), Step('D', 'F')]]}
+
+
+def claim_paths(word, side=None):
+    extra = [[p[0]._replace(g={'paternal': 'M', 'maternal': 'F'}[side]) if side and p[0].m == 'U' else p[0], *p[1:]]
+             for p in BY_MARRIAGE.get(word, [])]
+    return (paths_of(word, side) or []) + extra
+
+
+ONLY = set(KIN)   # "only son", "only grandson", "only daughter-in-law", "only maternal uncle", ...
 # Words that take a side ("maternal uncle"): the first step goes to the father (paternal) or mother (maternal).
 SIDED = {w for w, ps in KIN.items() if all(p[0].m == 'U' and len(p) > 1 for p in ps)}
 # Links that are not family; reported when no family link exists.
@@ -75,7 +88,8 @@ def _by(g, m, f, n):
     return m if g == 'M' else f if g == 'F' else n
 
 
-ORDINAL = ['', '', 'second', 'third', 'fourth', 'fifth']
+ORDINAL = ['', '', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh']
+REMOVED = {1: 'once', 2: 'twice', 3: 'thrice'}
 
 
 def describe(moves) -> str:
@@ -155,13 +169,16 @@ def name_moves(moves) -> dict:
             elif u == 1:
                 word = _by(g_b, 'nephew', 'niece', 'nephew or niece') if d == 2 else \
                     gr(d - 3) + _by(g_b, 'grand-nephew', 'grand-niece', 'grand-nephew or grand-niece')
-            elif u == d and u <= 5:
+            elif u == d and u <= 12:
                 word = 'cousin' if u == 2 else f'{ORDINAL[u - 1]}-cousin'
                 sided = True
             elif u == 2 and d == 3:
                 word = f"cousin's {_by(g_b, 'son', 'daughter', 'child')}"
             elif u == 3 and d == 2:
                 word = f"{_by(moves[0][1], 'father', 'mother', 'parent')}'s cousin"
+            elif 2 <= min(u, d) <= 12:   # cousin chart: degree from the nearer side, "removed" by the generation gap
+                n, k = min(u, d) - 1, abs(u - d)
+                word = f"{'cousin' if n == 1 else ORDINAL[n] + '-cousin'} {REMOVED.get(k, f'{k} times')} removed"
         elif lead and not trail:
             if u == 0 and d == 0:
                 word = _by(g_b, 'husband', 'wife', 'spouse')

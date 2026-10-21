@@ -51,7 +51,9 @@ def test_grammar_only_allows_valid_facts():
     assert '<eos>' in allowed_next(seq, ents)
     assert '#3' not in allowed_next([], ents) and '#1' in allowed_next([], ents)
     assert '@1' not in allowed_next(['@1', 'mother'], ents)
-    assert allowed_next(['@0', 'only'], ents) == sorted(['brother', 'child', 'daughter', 'sibling', 'sister', 'son'])
+    after_only = allowed_next(['@0', 'only'], ents)
+    assert {'son', 'grandson', 'daughter-in-law', 'uncle', 'paternal', 'maternal'} <= set(after_only)
+    assert 'friend' not in after_only and 'not' not in after_only
     assert 'uncle' in allowed_next(['@0', 'maternal'], ents) and 'son' not in allowed_next(['@0', 'maternal'], ents)
     assert parse(' '.join(seq))[1] == []
 

@@ -18,7 +18,7 @@ import heapq
 from dataclasses import dataclass, field
 
 from .facts import is_named
-from .kin import KIN, NONKIN, name_moves, paths_of
+from .kin import KIN, NONKIN, claim_paths, name_moves, paths_of
 
 OPP = {'M': 'F', 'F': 'M'}
 SLOT = {'M': 'fa', 'F': 'mo'}
@@ -510,8 +510,13 @@ def _violation(w, run: _Run):
     ids = run.ids
     for f in run.onlys:                       # "y is x's only son": every other son of x is y
         x, y = w.find(ids[f['x']]), w.find(ids[f['y']])
-        want = KIN[f['r']][0][0].g
-        pool = w.children(x) if f['r'] in ('son', 'daughter', 'child') else w.siblings(x)
+        paths = paths_of(f['r'], f.get('side'))
+        want = paths[0][-1].g if paths else None
+        pool = []                             # relatives along the word, last step's gender left open
+        for p in paths:
+            for z in w.follow(x, [*p[:-1], p[-1]._replace(g=None)]):
+                if z != x and z not in pool:
+                    pool.append(z)
         for z in pool:
             if z == y:
                 continue
@@ -520,6 +525,11 @@ def _violation(w, run: _Run):
                 return 'fail' if w.named[z] and w.named[y] else ('merge', z, y, want)
             if not gz:
                 return ('branch', z, y, want)
+        yp = w.spouse(y)
+        for p in paths if paths and paths[0][-1].m == 'S' else []:
+            for z in w.follow(x, p[:-1]):     # "only daughter-in-law": a son with children is married, to y
+                if z != x and yp >= 0 and z != yp and w.spouse(z) < 0 and w.children(z):
+                    return 'fail' if w.named[z] and w.named[yp] else ('merge', z, yp, None)
     for f in run.attrs:                       # "x has no brother or sister": anyone sharing x's parents is x
         x = w.find(ids[f['x']])
         want = {'no-brother': 'M', 'no-sister': 'F'}.get(f['a'])
@@ -572,7 +582,15 @@ def _has(w, has, run: _Run, create=True):
     f, rest = has[0], has[1:]
     x, n = run.ids[f['x']], f['n']
     definite = w.relatives(x, f['r'], f.get('side'))
-    if len(definite) > n:
+    if len(definite) > n:   # too many: an unnamed one may be someone already counted ("has one child, Aman")
+        for i, a in enumerate(definite):
+            for b in definite[i + 1:]:
+                if (w.named[a] and w.named[b]) or not run.tick():
+                    continue
+                w2 = w.clone()
+                if w2.unify(a, b) and w2.normalize():
+                    w2.choices.append(('same', a, b))
+                    yield from _has(w2, has, run, create)
         return
     want = (paths_of(f['r'], f.get('side')) or [[None]])[0][-1].g
     maybe = []
@@ -939,10 +957,14 @@ def claim_holds(w: World, group: list[dict], ids: dict):
     def rel_value(x, y, f):
         if f['r'] in NONKIN:
             return any({w.find(a), w.find(c)} == {x, y} and r == f['r'] for a, r, c in w.nonkin)
-        rel = w.relatives(x, f['r'], f.get('side'))
+        paths = claim_paths(f['r'], f.get('side'))
+        rel = []
+        for q in paths:
+            for r in w.follow(x, q):
+                if r != w.find(x) and r not in rel:
+                    rel.append(r)
         if y in rel:
             return True if not f.get('only') or rel == [y] else False
-        paths = paths_of(f['r'], f.get('side')) or []
         neutral = [[st._replace(g=None) for st in q] for q in paths]
         reach = any(y in w.follow(x, q) for q in neutral)
         return None if reach and not w.g(y) else False

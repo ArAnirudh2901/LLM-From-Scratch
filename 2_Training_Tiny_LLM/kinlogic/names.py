@@ -35,6 +35,42 @@ Chatterjee Naidu Desai Kulkarni Patil Jadhav Smith Johnson Brown Taylor Wilson C
 LETTERS = [c for c in 'ABCDEFGHJKLMNOPQRSTUVWXYZ']
 
 # Gender of common names, for questions that never say it (exams assume "Dinabandhu" is a man).
+MORE_M = '''Aadesh Aakash Aarush Abhinav Abhiram Adarsh Adil Advait Agastya Ahmed Ajit Akbar Akshay Alok Amitabh Amol Anant
+Anirban Anirudh Ansh Anshul Anurag Apurva Arnav Arpit Arun Arvind Ashish Ashok Ashwin Atharva Atul Avinash Ayaan Ayush
+Badal Balaji Balram Bharat Bhaskar Bhavesh Bhushan Bipin Brijesh Chaitanya Chandan Chetan Chirag Daksh Darshan Dev
+Devansh Devendra Dhananjay Dharmesh Dhruv Dilip Dinesh Divyansh Eklavya Faisal Farhan Gagan Ganesh Gaurav Girish
+Gopal Govind Gulshan Hardik Harish Harshad Hemant Himanshu Hitesh Imran Indrajit Irfan Ishaan Jagdish Jai Jatin Jayant
+Jayesh Jitendra Kabir Kailash Kamal Kapil Karthik Kartik Kashyap Kedar Keshav Ketan Kishore Krishna Kunal Lakshman
+Lalit Laxman Madhav Mahendra Mahesh Manav Manish Manoj Mayank Mihir Milind Mohit Mukesh Murali Nachiket Naman Narayan
+Naresh Naveen Nayan Neeraj Nikhil Nilesh Niranjan Nishant Omkar Pankaj Paras Parth Pawan Piyush Pradeep Pramod
+Pranav Prasad Prashant Pratap Praveen Prem Pritam Puneet Purushottam Raghav Raghu Rajat Rajendra Rajesh Rajiv Rakesh
+Ramesh Ranjit Ravindra Rishabh Rishi Ritesh Rohan Rohit Ronak Rudra Sachin Sagar Sahil Sai Saket Salman Sameer
+Sandeep Sanjay Santosh Sarthak Satish Saurabh Shailesh Shantanu Sharad Shaurya Shekhar Shiv Shivam Shreyas Shubham
+Siddharth Sohail Somnath Subhash Sudhir Sujit Sumit Sunil Suraj Suresh Surya Swapnil Tanmay Tarun Tejas Tushar Uday
+Umesh Utkarsh Vaibhav Varun Vasant Ved Vedant Venkat Vihaan Vijay Vikas Vikram Vinay Vinod Vipul Viraj Vishal Vishnu
+Vivek Yash Yashwant Yogesh Yuvraj Zubair Zaheer Abdul Asif Aziz Bilal Danish Ehsan Fahad Hamid Hassan Iqbal Javed
+Junaid Kareem Mansoor Mustafa Nadeem Rashid Rizwan Sajid Shahid Tariq Wasim Yusuf Jasbir Gurpreet Harpreet Manpreet
+Jaswant Kuldeep Navjot Ranbir Sukhwinder Tejinder Arijit Debashish Partha Pranab Saurav Soumya Subhro Tapan Biswajit
+Abhijit Anupam Jeevan Joseph Mathew Thomas Varghese Ajmal Rahim Selvam Murugan Senthil Karthikeyan Ilango Arumugam
+Pandian Ramanathan Srinivas Raghunath Venkatesh Nagaraj Shankar Mallikarjun Basavaraj Prakash Raju Rohan Aniket'''.split()
+MORE_F = '''Aadya Aanya Aarohi Abha Akanksha Alka Amrita Anamika Anandi Anika Anushka Anvi Aparajita Aradhya Arpita
+Asmita Avni Ayesha Bhagyashree Bharti Bhavana Bindu Chandni Chhaya Damini Deepa Deepali Deepti Devika Dhanashree
+Divya Durga Ekta Esha Farah Fatima Gargi Gayatri Geeta Gita Gunjan Hema Hemlata Indira Indu Ira Isha Ishita Jahnavi
+Janaki Jasleen Jasmine Juhi Kajal Kalpana Kamala Kanchan Kanika Karishma Kavita Kavya Khushi Kirti Komal Kritika
+Kusum Lakshmi Lata Leela Lavanya Madhuri Mahima Malati Malini Mamta Manisha Manju Mansi Maya Medha Meenakshi Megha
+Mehak Minal Mitali Mona Mridula Mrunal Nalini Namita Nandini Navya Neelam Neeta Nidhi Niharika Nikita Nirmala Nisha
+Nupur Padma Pallavi Pari Parvati Payal Pihu Pooja Poonam Prachi Pragya Pratibha Preeti Prerna Priya Priyanka Purnima
+Radha Radhika Rajni Rakhi Rani Rashmi Rekha Renu Revati Rhea Richa Riddhi Rina Ritika Ritu Riya Rohini Ruchi Rupali
+Sadhana Sakshi Saloni Sanchita Sangeeta Sanjana Sapna Sarita Saroj Savita Shalini Sharmila Sheetal Shilpa Shivani
+Shobha Shraddha Shreya Shruti Shubhangi Simran Smita Sneha Sonal Sonali Sonam Suhani Sujata Sulochana Suman Sunanda
+Sunita Supriya Surbhi Sushma Swara Swati Tanvi Tanya Tara Trisha Tulsi Uma Urmila Usha Vaishali Vandana Vani Varsha
+Vasudha Vidya Vimala Vinita Yamini Zara Zoya Afreen Ameena Bushra Farzana Hina Mehrunnisa Nasreen Rukhsar Saba Sana
+Shabana Shahnaz Tabassum Yasmin Gurleen Harleen Manjeet Navneet Simranjeet Ananya Debjani Ishani Moumita Paromita
+Rituparna Sohini Sudeshna Tanushree Mary Teresa Annamma Lissy Ammini Kamakshi Meenal Selvi Kalyani Bhavani Janani
+Sowmya Revathi Shanthi Vijaya Kokila Malathi Sukanya Hemavathi Lalitha Saraswati Tanu Pinky Chiku Minnie Guddi'''.split()
+UNISEX = {'kiran', 'harsha', 'shashi', 'sunny', 'jyoti', 'santoshi', 'rinku', 'bablu', 'pappu', 'guddu'}   # never given a gender by name
+INDIAN_M = [n for n in dict.fromkeys(INDIAN_M + MORE_M) if n.lower() not in UNISEX]
+INDIAN_F = [n for n in dict.fromkeys(INDIAN_F + MORE_F) if n.lower() not in UNISEX and n not in INDIAN_M]
 NAME_GENDER = {**{x.lower(): 'M' for x in INDIAN_M + WORLD_M}, **{x.lower(): 'F' for x in INDIAN_F + WORLD_F}}
 
 

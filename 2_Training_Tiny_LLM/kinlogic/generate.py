@@ -251,10 +251,10 @@ class Q:
                 self.facts.append(G(r, r.g))
         self.facts += list(facts)
 
-    def finish(self, kind: str, options=None, extra=None) -> dict | None:
+    def finish(self, kind: str, options=None, extra=None, noise=True) -> dict | None:
         rng = self.rng
         text = ' '.join(s.strip() for s in self.sentences if s.strip())
-        if rng.random() < 0.12:   # real questions drop words: "the son of only son my grandfather"
+        if noise and rng.random() < 0.12:   # real questions drop words: "the son of only son my grandfather"
             import re
             text = re.sub(r'\b(the|of) (?!man\b|woman\b|boy\b|girl\b|lady\b|gentleman\b|person\b)',
                           lambda m: '' if rng.random() < 0.25 else m.group(0), text)
@@ -486,10 +486,10 @@ def q_statements(rng) -> dict | None:
         if rng.random() < 0.12:
             for word in ('son', 'daughter'):
                 kids = w.relatives(x, word)
-                if len(kids) >= 2:
-                    rx, ks = q.ref(x), [q.ref(k) for k in kids[:3]]
+                if 2 <= len(kids) <= 3:   # "has two sons" means exactly two: all are listed, and the count is a fact
+                    rx, ks = q.ref(x), [q.ref(k) for k in kids]
                     clauses.append((f'{rx.surface} has {NUM[len(ks)]} {PLURAL[word]}, {_listing(rng, [k.surface for k in ks])}',
-                                    [F(rx, word, k) for k in ks]))
+                                    [{'t': 'has', 'x': rx, 'n': len(ks), 'r': word, 'side': None}] + [F(rx, word, k) for k in ks]))
                     break
         elif rng.random() < 0.06 and w.father(x) >= 0 and w.mother(x) >= 0:
             rx, rf, rm = q.ref(x), q.ref(w.father(x)), q.ref(w.mother(x))
@@ -1273,8 +1273,14 @@ def q_identity(rng) -> dict | None:
 
 # ---------- the training mix ----------
 
+def q_deep(rng) -> dict | None:
+    """Chains of 1-12 links in five formats (kinlogic/deep.py)."""
+    from . import deep
+    return deep.sample(rng)
+
+
 MIX = {'statements': 20, 'nested': 10, 'speech': 12, 'identity': 6, 'introduce': 6, 'coded': 12, 'puzzle': 12,
-       'sufficiency': 6, 'claims': 6, 'story': 10}
+       'sufficiency': 6, 'claims': 6, 'story': 10, 'deep': 18}
 KINDS = {k: globals()[f'q_{k}'] for k in MIX}
 
 

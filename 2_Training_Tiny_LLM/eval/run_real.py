@@ -11,17 +11,26 @@ import json
 import re
 
 from kinlogic.exam import _relation_option, answer, option_moves
+from eval.sites import complete
 from kinlogic.explain import match_option
 
 
 def load_real(pattern='data/real_questions/*.jsonl'):
-    rows = []
+    rows, seen = [], set()
     for f in sorted(glob.glob(pattern)):
         for line in open(f):
             r = json.loads(line)
             if r.get('url', '').lower().endswith('.pdf'):   # page breaks scramble PDF questions
                 continue
-            r['options'] = [[l, re.sub(r'^\s*\(?[A-Ea-e1-5][).]\s+', '', t)] for l, t in r.get('options') or []]
+            r['options'] = [[l, re.sub(r'^\s*\(?[A-Ea-e1-5][).]\s*\.?\s*', '', t)] for l, t in r.get('options') or []]
+            if r['options'] and all(l.isdigit() for l, _ in r['options']):   # "1) ... 5)" with the answer as a letter
+                r['options'] = [['abcde'[int(l) - 1], t] for l, t in r['options'] if 1 <= int(l) <= 5]
+                if r.get('answer') and r['answer'].isdigit():
+                    r['answer'] = 'abcde'[int(r['answer']) - 1]
+            key = re.sub(r'[^a-z0-9]+', ' ', (r['question'] + ' ' + ' '.join(t for _, t in r['options'])).lower()).strip()
+            if key in seen or complete(r):   # once across sites; only questions answerable from their own text
+                continue
+            seen.add(key)
             rows.append(r)
     return rows
 

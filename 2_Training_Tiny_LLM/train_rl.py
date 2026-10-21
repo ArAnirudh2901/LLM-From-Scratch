@@ -23,32 +23,40 @@ import torch
 import torch.nn.functional as F
 
 from kinlogic import generate as gen
-from model_gpt import GPT
+from model_gpt import GPT  # noqa: F401
+from model_reader import make_model
 from qa_data import hidden_states
-from reader import Vocab, collate, encode_example, generate
+from reader import Vocab, collate, encode_example, fact_losses, fact_token_logprobs, generate
 from train import get_device
 from train_reader import answers, canon, dev_set, evaluate, load_jsonl
 
 
-def reward(pred, gold, gold_ans, people):
+def fact_set(lf):
+    from kinlogic.facts import format_stmt, parse
+    return {format_stmt(st) for st in parse(lf)[0]}
+
+
+def reward(pred, gold, gold_ans, people, w_process=0.5):
+    """Outcome: +1 same answers as the gold facts, +0.2 the exact facts, -0.2 contradiction or no question.
+    Process (per fact, exact because facts are discrete): + w_process x share of gold facts written,
+    - w_process / 2 x share of written facts that are not gold."""
     if not pred:
         return -0.2
     ans = answers(pred, people)
     if ans is None or not ans or any(a in ('contradiction', 'none') for a in ans if isinstance(a, str)):
         return -0.2
     r = 1.0 if ans == gold_ans else 0.0
-    return r + (0.2 if canon(pred) == canon(gold) else 0.0)
+    r += 0.2 if canon(pred) == canon(gold) else 0.0
+    if w_process:
+        p, g = fact_set(pred), fact_set(gold)
+        r += w_process * len(p & g) / max(1, len(g)) - w_process / 2 * len(p - g) / max(1, len(p))
+    return r
 
 
 def seq_logprobs(model, vocab, batch, device):
-    """Mean log-probability of each sequence's facts (positions after <c>) under `model`, per token too."""
+    """Log-probability of each fact token under `model` (copy head included for v10), and the token mask."""
     idx, tgt, _ = collate(batch, vocab.stoi['<pad>'], device)
-    h = hidden_states(model, idx)
-    mask = tgt != -100
-    lp = torch.zeros(tgt.shape, device=device)
-    logits = model.head(h[mask]).float()
-    lp[mask] = torch.log_softmax(logits, -1).gather(1, tgt[mask][:, None])[:, 0]
-    return lp, mask
+    return fact_token_logprobs(model, idx, tgt, vocab)
 
 
 def main():
@@ -62,6 +70,7 @@ def main():
     ap.add_argument('--lr', type=float, default=1e-5)
     ap.add_argument('--beta', type=float, default=0.04, help='KL penalty to the supervised model')
     ap.add_argument('--sft_weight', type=float, default=0.1)
+    ap.add_argument('--w_process', type=float, default=0.5, help='per-fact (process) reward weight')
     ap.add_argument('--p_clutrr', type=float, default=0.15)
     ap.add_argument('--eval_every', type=int, default=200)
     ap.add_argument('--dev', type=int, default=800)
@@ -73,8 +82,8 @@ def main():
     rng = random.Random(a.seed)
     ck = torch.load(a.init, map_location='cpu', weights_only=False)
     vocab, cfg = Vocab(ck['vocab']), ck['config']
-    policy = GPT(**cfg).to(device)
-    policy.load_state_dict(ck['model'])
+    policy = make_model(cfg).to(device)
+    policy.load_state_dict(ck['model'])   # the averaged (EMA) weights when the run kept them
     ref = copy.deepcopy(policy).eval()
     for p_ in ref.parameters():
         p_.requires_grad_(False)
@@ -99,7 +108,7 @@ def main():
         for q, group in zip(qs, samples):
             people = sorted({t for t in q['tokens'] if t[0] == '@'})
             gold_ans = answers(q['lf'], people)
-            rs = [reward(f, q['lf'], gold_ans, people) for f, _ in group]
+            rs = [reward(f, q['lf'], gold_ans, people, a.w_process) for f, _ in group]
             rewards += rs
             m = sum(rs) / len(rs)
             sd = math.sqrt(sum((x - m) ** 2 for x in rs) / len(rs))
@@ -125,10 +134,9 @@ def main():
                 loss = pg + a.beta * kl
             if a.sft_weight:   # keep the supervised skill: a little loss on the gold facts
                 gold = [e for e in (encode_example(vocab, q['tokens'], q['lf'], cfg['block_size']) for q in qs) if e]
-                idx, tgt, _ = collate(gold, vocab.stoi['<pad>'], device)
-                h = hidden_states(policy, idx)
-                mt = tgt != -100
-                loss = loss + a.sft_weight * F.cross_entropy(policy.head(h[mt]).float(), tgt[mt])
+                idx, tgt, lm = collate(gold, vocab.stoi['<pad>'], device)
+                loss_f, _ = fact_losses(policy, idx, tgt, lm, vocab)
+                loss = loss + a.sft_weight * loss_f
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
         scaler.unscale_(opt)

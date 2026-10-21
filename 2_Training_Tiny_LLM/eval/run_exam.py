@@ -30,12 +30,12 @@ if __name__ == '__main__':
         run(gold_reader)
     else:
         import torch
-        from model_gpt import GPT
+        from model_reader import make_model
         from reader import Vocab, decode
         from train import get_device
         dev = get_device()
         ck = torch.load(sys.argv[1], map_location='cpu', weights_only=False)
-        model = GPT(**ck['config']).to(dev)
+        model = make_model(ck['config']).to(dev)
         model.load_state_dict(ck['model'])
         vocab = Vocab(ck['vocab'])
         run(lambda item: (lambda batch: decode(model, vocab, batch, dev)))

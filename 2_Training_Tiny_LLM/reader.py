@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 
 from kinlogic.facts import allowed_next, vocabulary
-from qa_data import _heads, encode_prefix
+from qa_data import _heads, encode_prefix, hidden_states
 
 SPECIALS = ['<pad>', '<unk>', '<bos>', '<c>', '<sep>', '<eos>']
 N_ENT, N_NEW = 32, 16
@@ -102,13 +102,18 @@ def _prefix(model, vocab: Vocab, chunk, device, max_new):
     idx = torch.full((len(pre), int(plen.max())), vocab.stoi['<pad>'], dtype=torch.long)
     for i, p in enumerate(pre):
         idx[i, :len(p)] = torch.tensor(p)
-    cache, logits = encode_prefix(model, idx.to(device), plen)
     ents = [list(dict.fromkeys(t for t in toks if t[0] == '@' and t in vocab.stoi)) for toks in chunk]
+    if getattr(model, 'arch', None) == 'v10':   # log-probabilities, copy head included
+        cache, logp = model.prefill(idx.to(device), plen)
+        return cache, logp, plen, idx.size(1), ents
+    cache, logits = encode_prefix(model, idx.to(device), plen)
     return [list(kv) for kv in cache], logits, plen, idx.size(1), ents
 
 
 def _step(model, cache, tok, pos, plen, P, G):
     """One new token per row, attending to the row's prefix (first plen of P positions) and its G written tokens."""
+    if getattr(model, 'arch', None) == 'v10':
+        return model.step(cache, tok, pos, plen, P, G)
     device = tok.device
     x = model.tok_emb(tok[:, None]) + model.pos_emb(pos.clamp(max=model.block_size - 1)[:, None])
     mask = torch.cat([torch.arange(P, device=device)[None, :] < plen[:, None],
@@ -207,3 +212,30 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
 def decode(model, vocab: Vocab, inputs: list[list[str]], device, max_new: int = 96, bs: int = 64) -> list[str]:
     """Greedy facts for each question."""
     return [r[0][0] for r in generate(model, vocab, inputs, device, k=1, max_new=max_new, bs=bs)]
+
+
+def fact_losses(model, idx, tgt, lm, vocab):
+    """Mean cross-entropy of the facts (copy head included for v10) and of the question's words."""
+    if getattr(model, 'arch', None) == 'v10':
+        mt = tgt != -100
+        lp, h = model.fact_logprobs(idx, mt, vocab.stoi['<c>'])
+        loss_f = F.nll_loss(lp, tgt[mt])
+    else:
+        h = hidden_states(model, idx)
+        mt = tgt != -100
+        loss_f = F.cross_entropy(model.head(h[mt]).float(), tgt[mt])
+    ml = lm != -100
+    loss_lm = F.cross_entropy(model.head(h[ml]).float(), lm[ml]) if ml.any() else torch.zeros((), device=idx.device)
+    return loss_f, loss_lm
+
+
+def fact_token_logprobs(model, idx, tgt, vocab):
+    """Per-token log-probability of each target fact token (B, T), zero elsewhere; and the target mask."""
+    mt = tgt != -100
+    if getattr(model, 'arch', None) == 'v10':
+        lp, _ = model.fact_logprobs(idx, mt, vocab.stoi['<c>'])
+    else:
+        lp = torch.log_softmax(model.head(hidden_states(model, idx)[mt]).float(), -1)
+    out = torch.zeros(tgt.shape, device=idx.device)
+    out[mt] = lp.gather(1, tgt[mt][:, None])[:, 0]
+    return out, mt

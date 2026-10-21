@@ -46,7 +46,9 @@ NAME_NEXT = {'is', 'was', "'s", 'has', 'had', 'and', ',', 'said', 'says', 'told'
 # After a sentence-initial "Will", "May", "Hope"... these keep it an ordinary word ("Will you...").
 NOT_A_NAME_NEXT = {'you', 'we', 'they', 'i', 'he', 'she', 'it', 'not', 'be', 'the', 'a', 'an', 'this', 'that', 'there'}
 # After a single capital "A" these make it a person ("A is ..."); any other lowercase word makes it the article.
-LETTER_NEXT = NAME_NEXT | {'are', 'were', 'married', 'who', 'whose', 'being', 'points', 'pointed', 'pointing',
+I_PRONOUN_NEXT = {'am', "'m", 'have', 'had', 'was', 'will', 'would', 'shall', 'can', 'could', 'do', 'did', 'said',
+                  'told', 'asked', 'think', 'know', 'met', 'saw', 'went', 'went', 'live', 'love', 'pointed'}
+LETTER_NEXT = NAME_NEXT | {'related', 'are', 'were', 'married', 'who', 'whose', 'being', 'points', 'pointed', 'pointing',
                            'looks', 'looked', 'showed', 'shows', 'went', 'goes', 'loves', 'got', 'gets'}
 HEADS = {'man', 'woman', 'boy', 'girl', 'lady', 'gentleman', 'person', 'guy'}
 COPULA = {'is', 'was', 'are', 'were', 'be', 'been', 'being', 'become', 'becomes', 'became'}
@@ -118,7 +120,7 @@ def split_options(text: str) -> tuple[str, list[tuple[str, str]]]:
             end = seq[i + 1].start() if i + 1 < len(seq) else len(tail)
             opts.append(((m.group(1) or m.group(2)).lower(), tail[m.end():end].strip(' |;,')))
         statements = sum(1 for _, o in opts if _VERBISH.search(o) and len(o.split()) >= 4 and not o.lower().startswith(('only', 'both', 'either', 'neither', 'statement', 'all')))
-        if statements * 2 >= len(opts):
+        if statements * 2 >= len(opts) and not (q >= 0 and lab == 'a'):   # lettered options after "?" may be statements
             continue
         found.append((seq[0].start(), opts))
     if found:
@@ -156,6 +158,7 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
     extra = {n.strip().lower() for n in names or [] if n.strip()}
     lowercase_text = not any(t[0].isupper() for t in raw if t[0].isalpha())
     roman = 'IV' in raw
+    letter_names = sum(1 for x in raw if re.fullmatch(r'[A-HJ-Z]', x)) >= 2
     ents, by_text, by_head = [], {}, {}
     out = []
 
@@ -176,7 +179,10 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
         nxt = raw[i + 1].lower() if i + 1 < len(raw) else ''
         kind = None
         roman_v = t == 'V' and nxt == '.' and roman and (i == 0 or raw[i - 1] in '.?!')
-        if re.fullmatch(r'[A-Z]', t) and t != 'I' and not roman_v:
+        prv = raw[i - 1].lower() if i else ''
+        letter_i = t == 'I' and letter_names and not roman and nxt not in I_PRONOUN_NEXT and (   # "I is the brother of H"
+            nxt in ('is', 'has', 'does', "'s", 'are') or prv in ('of', 'and', 'by', 'to', 'than', 'with', ','))
+        if re.fullmatch(r'[A-Z]', t) and (t != 'I' or letter_i) and not roman_v:
             article = t == 'A' and re.fullmatch(r'[a-z]\w*', raw[i + 1] if i + 1 < len(raw) else '') and nxt not in LETTER_NEXT
             if not article:
                 kind = 'letter'

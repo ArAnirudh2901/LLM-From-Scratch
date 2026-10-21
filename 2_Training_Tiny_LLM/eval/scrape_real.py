@@ -132,6 +132,7 @@ def main():
     ap.add_argument('--sites', default=','.join(SITES))
     ap.add_argument('--max-pages', type=int, default=60)
     ap.add_argument('--blogs', default=None, help='file of article URLs to read as well')
+    ap.add_argument('--name', default='blogs', help='output file name for --blogs (data/real_questions/<name>.jsonl)')
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     http = Polite()
@@ -140,10 +141,10 @@ def main():
         uniq = {}
         for r in rows:
             uniq.setdefault(r['question'].lower(), {**r, 'site': urllib.parse.urlsplit(r['url']).netloc})
-        with open(OUT / 'blogs.jsonl', 'w') as f:
+        with open(OUT / f'{a.name}.jsonl', 'w') as f:
             for r in uniq.values():
                 f.write(json.dumps(r) + '\n')
-        print(f'blogs: {len(uniq)} questions')
+        print(f'{a.name}: {len(uniq)} questions')
         return
     for name in a.sites.split(','):
         start, parse = SITES[name]
@@ -217,6 +218,73 @@ def blog(text, url):
     return out
 
 
+OPT = re.compile(r'^(?:\d+\.\s+)?(?:\(([A-Ea-e])\)|([A-Ea-e])[.)])\s*(.+?)$')
+ANS_OPT = re.compile(r'^(?:correct\s+)?(?:answer|ans|option)\b\.?\s*(?:is)?\s*[:\-–]?\s*(?:option\s*)?\(?([A-Ea-e])\b\)?', re.I)
+STOP = re.compile(r'^(answer|ans\b|explanation|solution|sol\b|hence|so,|therefore|thus|directions?\b)|→|\bcorrect$', re.I)
+
+
+def md_clean(t):
+    t = re.sub(r'!\[[^\]]*\]\([^)]*\)', ' ', t)             # images
+    t = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', t)          # links keep their text
+    t = re.sub(r'(\*\s*){3,}|^\W*(?:question|q)\s*\d+\W*', ' ', t, flags=re.I)
+    return clean(re.sub(r'\*\s*(?:question|q)\s*\d+\W*', ' ', t, flags=re.I))
+
+
+def quiz(text, url):
+    """Unnumbered quiz layouts: a question, a run of option lines ('A. Brother', '1. A.Father Correct', '(a) Son'),
+    then the answer as a 'Correct' mark or an 'Answer: Option C' line (or a key of those at the end, in order).
+    Questions without their own facts (coded sets) get the set's 'Directions' block in front."""
+    lines = [l.strip().strip('*').strip() for l in text.splitlines()]
+    lines = [l for l in lines if l]
+    runs, i = [], 0
+    while i < len(lines):   # runs of options labelled a, b, c, ... in order
+        j, labs = i, []
+        while j < len(lines) and (m := OPT.match(lines[j])) and (m.group(1) or m.group(2)).lower() == 'abcde'[len(labs)]:
+            labs.append(j)
+            j += 1
+        if len(labs) >= 3:
+            runs.append((i, j))
+            i = j
+        else:
+            i += 1
+    out, key = [], []
+    for n, (s, e) in enumerate(runs):
+        nxt = runs[n + 1][0] if n + 1 < len(runs) else len(lines)
+        opts, ans = [], None
+        for l in lines[s:e]:
+            m = OPT.match(l)
+            t = m.group(3)
+            if re.search(r'\s+correct$', t, re.I):
+                ans, t = (m.group(1) or m.group(2)).lower(), re.sub(r'\s+correct$', '', t, flags=re.I)
+            opts.append([(m.group(1) or m.group(2)).lower(), clean(t)])
+        for l in lines[e:min(nxt, e + 8)]:
+            if ans is None and (m := ANS_OPT.match(l)):
+                ans = m.group(1).lower()
+        start = runs[n - 1][1] if n else 0
+        q = []
+        for l in reversed(lines[start:s]):   # the stem: lines back to the previous item's answer or explanation
+            if STOP.search(l) or len(q) >= 8:
+                break
+            q.insert(0, l)
+        q = md_clean(' '.join(q))
+        if len(RELWORDS.findall(q)) < 2:   # a coded set's question: put its directions in front
+            d = next((k for k in range(s - 1, -1, -1) if re.match(r'directions?\b', lines[k], re.I)), None)
+            if d is not None:
+                q = clean(' '.join(l for l in lines[d + 1:s] if not OPT.match(l) and not STOP.search(l))[-1500:])
+        out.append({'question': q, 'options': opts, 'answer': ans, 'answer_text': None, 'url': url})
+    numbered = {}   # a key at the end: "Answer 3" then "Answer: Option A"
+    for k, l in enumerate(lines):
+        if m := re.match(r'^(?:answer|ans|q(?:uestion)?)\s*\.?\s*(\d{1,2})\W*$', l, re.I):
+            m2 = next((m2 for l2 in lines[k + 1:k + 3] if (m2 := ANS_OPT.match(l2))), None)
+            if m2:
+                numbered[int(m.group(1))] = m2.group(1).lower()
+    key = [m.group(1).lower() for l in lines if (m := ANS_OPT.match(l))]
+    for n, r in enumerate(out):
+        if r['answer'] is None:
+            r['answer'] = numbered.get(n + 1) or (key[n] if len(key) == len(out) and all(x['answer'] is None for x in out) else None)
+    return [r for r in out if r['answer'] and len(RELWORDS.findall(r['question'])) >= 2]
+
+
 def blog_pages(http, urls):
     rows = []
     for url in urls:
@@ -225,7 +293,7 @@ def blog_pages(http, urls):
             continue
         text = http.fetch('https://r.jina.ai/' + url)
         if text:
-            got = blog(text, url)
+            got = max(blog(text, url), quiz(text, url), key=len)
             print(f'{len(got):3d} questions  {url}')
             rows += got
     return rows

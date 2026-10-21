@@ -20,7 +20,8 @@ import torch
 from kinlogic.engine import solve
 from kinlogic.exam import answer
 from kinlogic.facts import parse
-from model_gpt import GPT
+from model_gpt import GPT  # noqa: F401
+from model_reader import make_model
 from reader import Vocab, decode, generate
 from train import get_device
 
@@ -29,7 +30,7 @@ RIDDLE_URL = 'https://huggingface.co/datasets/ai4bharat/RiddleBench/resolve/main
 
 def load(ckpt, device):
     ck = torch.load(ckpt, map_location='cpu', weights_only=False)
-    model = GPT(**ck['config']).to(device)
+    model = make_model(ck['config']).to(device)
     model.load_state_dict(ck['model'])
     model.eval()
     return model, Vocab(ck['vocab'])
@@ -58,6 +59,21 @@ def eval_exam(read):
     right = score['dev'][0] + score['test'][0]
     return {'exam': f'{right}/{len(Q)}', 'exam_acc': right / len(Q), 'exam_dev_acc': score['dev'][0] / score['dev'][1],
             'exam_test_acc': score['test'][0] / score['test'][1], 'exam_misses': misses[:20]}
+
+
+def eval_authored(read):
+    """Hand-written questions (eval/authored_set.py): right option on the dev and the locked test split."""
+    from eval.authored_set import A, split
+    from eval.check_authored import option_reads   # noqa: F401  (expression items read their options with the model)
+    score = {'dev': [0, 0], 'test': [0, 0]}
+    for it in A:
+        sp = split(it)
+        if sp not in score:
+            continue
+        ok = answer(it['text'], read)['option'] == it['expect']
+        score[sp][0] += ok
+        score[sp][1] += 1
+    return {f'authored_{k}_acc': a / max(1, b) for k, (a, b) in score.items()} | {'authored_n': {k: b for k, (_, b) in score.items()}}
 
 
 def eval_clutrr(read, path='data/clutrr_facts/test.jsonl.gz', n=None):
@@ -96,6 +112,27 @@ def eval_riddle(read, cache='data/riddlebench.parquet'):
     return {'riddle_acc': right / len(df), 'riddle_answered': answered / len(df), 'riddle_n': len(df)}
 
 
+def eval_deep(model, vocab, device, root='data/dataset'):
+    """The locked half of the deep-chain test set (build_dataset.py): answer accuracy overall, by depth and by format."""
+    from train_reader import evaluate, load_pool
+    rows = load_pool(root)['test'] if os.path.exists(f'{root}/test/deep.jsonl.gz') else []
+    if not rows:
+        return {'deep_acc': None}
+    r, preds = evaluate(model, vocab, device, rows)
+    ok = {}
+    for x, p in zip(rows, preds):
+        from train_reader import answers
+        people = sorted({t for t in x['tokens'] if t[0] == '@'})
+        hit = answers(p, people) == answers(x['lf'], people)
+        for k in (('depth', x['depth']), ('format', x['kind'])):
+            a = ok.setdefault(k, [0, 0])
+            a[0] += hit
+            a[1] += 1
+    return {'deep_acc': r['answer'], 'deep_n': len(rows),
+            'deep_by_depth': {d: round(ok[('depth', d)][0] / ok[('depth', d)][1], 3) for d in sorted(d for t, d in ok if t == 'depth')},
+            'deep_by_format': {f: round(a / b, 3) for (t, f), (a, b) in ok.items() if t == 'format'}}
+
+
 def eval_generated(model, vocab, device, n=1000, seed=4242):
     from train_reader import dev_set, evaluate
     r, _ = evaluate(model, vocab, device, dev_set(n, seed))
@@ -105,7 +142,7 @@ def eval_generated(model, vocab, device, n=1000, seed=4242):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--ckpt', default='runs/reader-v9/best.pt')
-    ap.add_argument('--sets', default='exam,clutrr,riddle,generated')
+    ap.add_argument('--sets', default='exam,authored,deep,clutrr,riddle,generated')
     ap.add_argument('--out', default=None, help='write the results as JSON here')
     ap.add_argument('--beam', type=int, default=4, help='readings tried per exam question (best first)')
     a = ap.parse_args()
@@ -115,8 +152,8 @@ def main():
     beam = lambda batch: generate(model, vocab, batch, device, k=a.beam)   # several readings, the engine picks
     res = {}
     for s in a.sets.split(','):
-        res.update({'exam': lambda: eval_exam(beam), 'clutrr': lambda: eval_clutrr(read), 'riddle': lambda: eval_riddle(beam),
-                    'generated': lambda: eval_generated(model, vocab, device)}[s]())
+        res.update({'exam': lambda: eval_exam(beam), 'authored': lambda: eval_authored(beam), 'clutrr': lambda: eval_clutrr(read), 'riddle': lambda: eval_riddle(beam),
+                    'generated': lambda: eval_generated(model, vocab, device), 'deep': lambda: eval_deep(model, vocab, device)}[s]())
         print(json.dumps({k: v for k, v in res.items() if not k.endswith('misses')}, indent=1), flush=True)
     if a.out:
         with open(a.out, 'w') as f:

@@ -23,26 +23,100 @@ from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from kinlogic import generate
 from kinlogic.engine import solve
 from kinlogic.facts import format as fmt, parse
-from model_gpt import GPT
+from model_gpt import GPT  # noqa: F401
+from model_reader import make_model
 from qa_data import hidden_states
-from reader import Vocab, build_vocab, collate, decode, encode_example
+from reader import fact_losses, Vocab, build_vocab, collate, decode, encode_example
 from train import get_device
 
 
 class Stream(IterableDataset):
-    """Endless training examples: generated questions, and CLUTRR stories with probability p_clutrr."""
+    """Endless training examples: generated questions, CLUTRR stories with probability p_clutrr, and the hand-written
+    training split (eval/authored_set.py) with probability p_authored."""
 
-    def __init__(self, vocab, block, seed, clutrr, p_clutrr, unk_p):
+    def __init__(self, vocab, block, seed, clutrr, p_clutrr, unk_p, authored=(), p_authored=0.0):
         self.vocab, self.block, self.seed, self.clutrr, self.p, self.unk_p = vocab, block, seed, clutrr, p_clutrr, unk_p
+        self.authored, self.pa = list(authored), p_authored
 
     def __iter__(self):
         w = get_worker_info()
         rng = random.Random(self.seed * 1000 + (w.id if w else 0))
         while True:
-            ex = rng.choice(self.clutrr) if self.clutrr and rng.random() < self.p else generate.sample(rng)
+            u = rng.random()
+            ex = (rng.choice(self.clutrr) if self.clutrr and u < self.p else
+                  rng.choice(self.authored) if self.authored and u < self.p + self.pa else generate.sample(rng))
             enc = encode_example(self.vocab, ex['tokens'], ex['lf'], self.block, rng, self.unk_p)
             if enc:
                 yield enc
+
+
+class PoolStream(IterableDataset):
+    """Endless examples from the verified pool (build_dataset.py): generator kinds by their mix weights, deep chains
+    with a curriculum (their share grows from p_deep[0] to p_deep[1] and the longest allowed chain from 4 to 12 links
+    over the run), CLUTRR stories and the hand-written training split."""
+
+    def __init__(self, vocab, block, seed, pool, clutrr, p_clutrr, authored, p_authored, unk_p, total, start, p_deep):
+        self.vocab, self.block, self.seed, self.pool = vocab, block, seed, pool
+        self.clutrr, self.pc, self.authored, self.pa, self.unk_p = clutrr, p_clutrr, authored, p_authored, unk_p
+        self.total, self.start, self.p_deep = total, start, p_deep
+
+    def __iter__(self):
+        w = get_worker_info()
+        nw = w.num_workers if w else 1
+        rng = random.Random(self.seed * 1000 + (w.id if w else 0))
+        kinds = [k for k in self.pool['kinds'] if self.pool['kinds'][k]]
+        weights = [generate.MIX.get(k, 1) for k in kinds]
+        depths = sorted(self.pool['deep'])
+        n = 0
+        while True:
+            t = min(1.0, (self.start + n * nw) / max(1, self.total))
+            u = rng.random()
+            if self.clutrr and u < self.pc:
+                ex = rng.choice(self.clutrr)
+            elif self.authored and u < self.pc + self.pa:
+                ex = rng.choice(self.authored)
+            elif self.pool.get('reworded') and u < self.pc + self.pa + self.pool['p_reworded']:
+                ex = rng.choice(self.pool['reworded'])
+            elif depths and rng.random() < self.p_deep[0] + (self.p_deep[1] - self.p_deep[0]) * t:
+                top = 4 + round(8 * t)
+                ds = [d for d in depths if d <= top]
+                ex = rng.choice(self.pool['deep'][rng.choices(ds, [1 + d for d in ds])[0]])
+            else:
+                ex = rng.choice(self.pool['kinds'][rng.choices(kinds, weights)[0]])
+            n += 1
+            enc = encode_example(self.vocab, ex['tokens'], ex['lf'], self.block, rng, self.unk_p)
+            if enc:
+                yield enc
+
+
+def load_pool(root):
+    """{'kinds': {kind: rows}, 'deep': {depth: rows}, 'dev': rows, 'test': rows} from build_dataset.py's files."""
+    import glob
+    import zlib
+    keep = lambda r: {'tokens': r['tokens'], 'lf': r['lf'], 'kind': r['kind'], 'depth': r.get('depth')}
+    pool = {'kinds': {}, 'deep': {}, 'dev': [], 'test': []}
+    for f in sorted(glob.glob(f'{root}/kinds/*.jsonl.gz')):
+        pool['kinds'][os.path.basename(f).split('.')[0]] = [keep(r) for r in load_jsonl(f)]
+    for f in sorted(glob.glob(f'{root}/deep/*/d*.jsonl.gz')):
+        for r in load_jsonl(f):
+            pool['deep'].setdefault(r['depth'], []).append(keep(r))
+    for r in load_jsonl(f'{root}/test/deep.jsonl.gz') if os.path.exists(f'{root}/test/deep.jsonl.gz') else []:
+        pool['dev' if zlib.crc32(r['text'].encode()) % 2 == 0 else 'test'].append(keep(r))
+    import gc
+    gc.collect()
+    gc.freeze()   # millions of long-lived objects: keep full collections from rescanning them (and from copying
+    return pool   # pages into the forked data workers)
+
+
+def by_depth(rows, preds):
+    """Answer accuracy per chain length, from one decoding pass."""
+    acc = {}
+    for x, p in zip(rows, preds):
+        people = sorted({t for t in x['tokens'] if t[0] == '@'})
+        a = acc.setdefault(x['depth'], [0, 0])
+        a[0] += answers(p, people) == answers(x['lf'], people)
+        a[1] += 1
+    return {d: round(a / b, 3) for d, (a, b) in sorted(acc.items())}
 
 
 def as_list(batch):
@@ -68,6 +142,7 @@ def answers(lf, people=()):
     """What a fact text leads to, as one comparable value: each question's first answer (for "which pair": every
     pair of members that qualifies), each claim's verdict, and for data sufficiency which statements suffice alone."""
     from kinlogic.engine import pair_holds
+    from kinlogic.exam import settled
     stmts, _ = parse(lf)
     try:
         r = solve(stmts, people=people, max_steps=5000)
@@ -85,7 +160,7 @@ def answers(lf, people=()):
     parts = sorted({s['part'] for s in stmts if s.get('part')})
     for k in parts:   # data sufficiency: does each statement alone give one answer?
         rk = solve(stmts, parts={k}, people=people, max_steps=5000)
-        keys.append(('alone', k, bool(rk['questions']) and rk['questions'][-1]['status'] == 'unique'))
+        keys.append(('alone', k, settled(rk)))
     return tuple(keys) + tuple(sorted(r['claims'].items()))
 
 
@@ -117,7 +192,7 @@ def warm_start(model, vocab, path):
     sd = model.state_dict()
     shared = 0
     for k, v in old.items():
-        if k in ('tok_emb.weight', 'head.weight'):
+        if k in ('tok_emb.weight', 'head.weight') and k in sd:   # v10 ties head to tok_emb
             for t, i in vocab.stoi.items():
                 j = old_stoi.get(t)
                 if j is not None:
@@ -142,6 +217,7 @@ def main():
     ap.add_argument('--dropout', type=float, default=0.1)
     ap.add_argument('--lm_weight', type=float, default=0.1)
     ap.add_argument('--p_clutrr', type=float, default=0.15)
+    ap.add_argument('--p_authored', type=float, default=0.005, help='share of hand-written training questions')
     ap.add_argument('--unk_p', type=float, default=0.02)
     ap.add_argument('--block', type=int, default=320)
     ap.add_argument('--workers', type=int, default=2)
@@ -152,6 +228,13 @@ def main():
     ap.add_argument('--compile', action='store_true')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--cpu', action='store_true')
+    ap.add_argument('--arch', default='v10', choices=['v10', 'gpt'], help='v10: RoPE, RMSNorm, SwiGLU, copy head')
+    ap.add_argument('--n_layer', type=int, default=6)
+    ap.add_argument('--ema', type=float, default=0.999, help='decay of the averaged weights used to evaluate and save (0: off)')
+    ap.add_argument('--pool', default='data/dataset', help="verified questions from build_dataset.py ('' : generate on the fly)")
+    ap.add_argument('--p_deep', default='0.08,0.25', help='share of deep chains at the start and the end of the run')
+    ap.add_argument('--reworded', default='data/reworded.jsonl.gz', help='frontier-model rewrites (kinlogic/reword.py), if present')
+    ap.add_argument('--p_reworded', type=float, default=0.15)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     device = get_device(force_cpu=a.cpu)
@@ -160,11 +243,11 @@ def main():
 
     ck = torch.load(latest, map_location='cpu', weights_only=False) if a.resume and os.path.exists(latest) else None
     vocab = Vocab(ck['vocab']) if ck else build_vocab()
-    cfg = ck['config'] if ck else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': 6, 'n_head': 6,
-                                   'n_embd': 384, 'dropout': a.dropout}
-    model = GPT(**cfg).to(device)
+    cfg = ck['config'] if ck else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': a.n_layer, 'n_head': 6,
+                                   'n_embd': 384, 'dropout': a.dropout, **({'arch': 'v10'} if a.arch == 'v10' else {})}
+    model = make_model(cfg).to(device)
     if ck:
-        model.load_state_dict(ck['model'])
+        model.load_state_dict(ck.get('raw') or ck['model'])
     elif a.init and os.path.exists(a.init):
         warm_start(model, vocab, a.init)
         model.to(device)
@@ -180,13 +263,33 @@ def main():
             scaler.load_state_dict(ck['scaler'])
         step, best = ck['step'], ck.get('best', -1.0)
         print(f'resumed at step {step} (best {best:.4f})', flush=True)
+    ema = None
+    if a.ema:   # averaged weights: evaluated and saved; usually better than the last step's
+        import copy
+        ema = copy.deepcopy(model).eval()
+        if ck and ck.get('raw'):   # 'model' holds the averaged weights
+            ema.load_state_dict(ck['model'])
+        for p_ in ema.parameters():
+            p_.requires_grad_(False)
     body = torch.compile(model) if a.compile and device.type == 'cuda' else model
 
     clutrr = load_jsonl('data/clutrr_facts/train.jsonl.gz') if os.path.exists('data/clutrr_facts/train.jsonl.gz') else []
     dev = dev_set(a.dev)
     cval = load_jsonl('data/clutrr_facts/validation.jsonl.gz', 600) if os.path.exists('data/clutrr_facts/validation.jsonl.gz') else []
-    loader = DataLoader(Stream(vocab, a.block, a.seed + step, clutrr, a.p_clutrr, a.unk_p), batch_size=a.batch,
-                        num_workers=a.workers, collate_fn=as_list, persistent_workers=a.workers > 0)
+    from eval.authored_set import examples as authored_examples
+    authored = authored_examples(('train',)) if a.p_authored > 0 else []
+    pool = load_pool(a.pool) if a.pool and os.path.isdir(a.pool) else None
+    if pool and a.reworded and os.path.exists(a.reworded):
+        pool['reworded'], pool['p_reworded'] = load_jsonl(a.reworded), a.p_reworded
+        print(f"reworded: {len(pool['reworded'])} verified rewrites at {a.p_reworded:.0%}", flush=True)
+    if pool:
+        print(f"pool: {sum(map(len, pool['kinds'].values()))} kind questions, {sum(map(len, pool['deep'].values()))} deep, "
+              f"deep dev {len(pool['dev'])} / test {len(pool['test'])}", flush=True)
+        data = PoolStream(vocab, a.block, a.seed + step, pool, clutrr, a.p_clutrr, authored, a.p_authored, a.unk_p,
+                          a.steps * a.batch, step * a.batch, tuple(map(float, a.p_deep.split(','))))
+    else:
+        data = Stream(vocab, a.block, a.seed + step, clutrr, a.p_clutrr, a.unk_p, authored, a.p_authored)
+    loader = DataLoader(data, batch_size=a.batch, num_workers=a.workers, collate_fn=as_list, persistent_workers=a.workers > 0)
     it = iter(loader)
 
     def lr_at(s):
@@ -195,10 +298,15 @@ def main():
         t = min(1.0, (s - a.warmup) / max(1, a.steps - a.warmup))
         return a.lr * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * t)))
 
-    def save(path, extra=None):
+    def save(path, extra=None, resumable=True):
+        """'model' holds the weights to use (averaged when EMA is on); a resumable checkpoint also keeps the raw
+        weights and the optimizer."""
         tmp = path + '.tmp'
-        torch.save({'model': model.state_dict(), 'opt': opt.state_dict(), 'scaler': scaler.state_dict(), 'config': cfg,
-                    'vocab': vocab.itos, 'step': step, 'best': best, 'format': 'reader-v9', **(extra or {})}, tmp)
+        ck_ = {'model': (ema or model).state_dict(), 'config': cfg, 'vocab': vocab.itos, 'step': step, 'best': best,
+               'format': 'reader-v10' if cfg.get('arch') == 'v10' else 'reader-v9', **(extra or {})}
+        if resumable:
+            ck_.update({'raw': model.state_dict() if ema else None, 'opt': opt.state_dict(), 'scaler': scaler.state_dict()})
+        torch.save(ck_, tmp)
         os.replace(tmp, path)   # never a half-written checkpoint, even if the session dies
 
     model.train()
@@ -209,10 +317,7 @@ def main():
         for g in opt.param_groups:
             g['lr'] = lr_at(step)
         with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
-            h = hidden_states(body, idx)
-            mt, ml = tgt != -100, lm != -100
-            loss_f = F.cross_entropy(model.head(h[mt]).float(), tgt[mt])
-            loss_lm = F.cross_entropy(model.head(h[ml]).float(), lm[ml]) if ml.any() else torch.zeros((), device=device)
+            loss_f, loss_lm = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab)
             loss = loss_f + a.lm_weight * loss_lm
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
@@ -220,6 +325,10 @@ def main():
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(opt)
         scaler.update()
+        if ema is not None:
+            with torch.no_grad():
+                for pe, p_ in zip(ema.parameters(), model.parameters()):
+                    pe.mul_(a.ema).add_(p_.detach(), alpha=1 - a.ema)
         step += 1
         seen += idx.size(0)
         if step % 100 == 0:
@@ -229,17 +338,23 @@ def main():
         if step % a.save_every == 0:
             save(latest)
         if step % a.eval_every == 0 or step == a.steps:
-            r, _ = evaluate(model, vocab, device, dev)
+            judge = ema or model
+            r, _ = evaluate(judge, vocab, device, dev)
             score = r['answer']
             line = f"[eval {step}] generated: exact {r['exact']:.3f} answer {r['answer']:.3f}"
             if cval:
-                rc, _ = evaluate(model, vocab, device, cval)
-                score = 0.75 * r['answer'] + 0.25 * rc['answer']
+                rc, _ = evaluate(judge, vocab, device, cval)
+                score = 0.6 * r['answer'] + 0.2 * rc['answer']
                 line += f" | CLUTRR val: exact {rc['exact']:.3f} answer {rc['answer']:.3f}"
+            if pool and pool['dev']:
+                rows = pool['dev'][:600]
+                rd, preds = evaluate(judge, vocab, device, rows)
+                score += 0.2 * rd['answer']
+                line += f" | deep dev answer {rd['answer']:.3f} by depth {by_depth(rows, preds)}"
             print(line + f" | by kind {r['kinds']}", flush=True)
             if score > best:
                 best = score
-                save(best_path, {'eval': r})
+                save(best_path, {'eval': r}, resumable=False)
                 print(f'  new best {best:.4f}', flush=True)
             save(latest)
     print(f'done: {step} steps, best {best:.4f}', flush=True)

@@ -61,12 +61,29 @@ def _same_path(moves, ans_moves) -> bool:
     return all(m == am and (g is None or g == ag) for (m, g), (am, ag) in zip(moves, ans_moves))
 
 
+def _side_ok(a, text, status):
+    """An option naming the other side ("Maternal uncle" for a paternal one) does not match a settled side."""
+    t = text.lower()
+    side = a.get('side')
+    return not (side and status != 'side' and ('paternal' in t or 'maternal' in t) and side not in t)
+
+
 def _relation_option(cands, options, status):
     """First answer (in order of preference) that some option names, by word or by spelled-out path."""
+    if status == 'assumed' or (cands and cands[0].get('assumed')):   # only a name suggests the gender: an option leaving it open is the setter's intent
+        a0 = next((a for a in cands if a.get('key') not in (None, 'none')), None)
+        neutral = [(m, None) for m, _, _ in (a0 or {}).get('moves') or []]
+        for lab, text in options if neutral else []:
+            alts = [option_moves(x) for x in re.split(r'\s+or\s+|/', text)]
+            if len(alts) > 1 and all(alts) and all(_same_path([(m, None) for m, _ in x], neutral) for x in alts):
+                return a0, lab
+        if a0 and _labelled(options, CANT):
+            return a0, _labelled(options, CANT)
     for a in cands:
         if a.get('key') in (None, 'none'):
             continue
-        lab = match_option(a.get('label') or a['key'], options) or match_option(a.get('base') or a['key'], options)
+        fit = [(l, t) for l, t in options if _side_ok(a, t, status)]
+        lab = match_option(a.get('label') or a['key'], fit) or match_option(a.get('base') or a['key'], fit)
         if lab:
             return a, lab
         am = [(m, g) for m, g, _ in a.get('moves') or []]
@@ -187,7 +204,8 @@ def _answer_one(p, lf, read, priors):
     out = {'facts': lf, 'options': options}
     low = p['question'].lower()
 
-    if any(s.get('claim') for s in stmts) and 'expression' in low and options:
+    expr_opts = options and sum(bool(re.search(r'[A-Za-z]\s*[^\w\s,.()\'"]{1,2}\s*[A-Za-z]', o)) for _, o in options) * 2 > len(options)
+    if any(s.get('claim') for s in stmts) and expr_opts:   # the options are expressions: read each one
         return {**out, **_which_expression(p, stmts, read, priors)}
     if any(s.get('claim') for s in stmts):
         return {**out, **_claims(stmts, options, low, people, priors)}
@@ -259,6 +277,9 @@ def _claims(stmts, options, low, people, priors):
     lab = None
     if 'how many' in low:
         lab = next((l for l, o in options if _number(o) == len(hits)), None)
+    elif options and len(options) == len(verdicts) and all(re.search(r'\b(is|are|was)\b', o) for _, o in options):
+        picked = [l for (l, _), k in zip(options, sorted(verdicts)) if k in hits]   # the options are the statements
+        lab = picked[0] if len(picked) == 1 else None
     else:
         for l, o in options:
             s = _roman_set(o)
@@ -269,14 +290,21 @@ def _claims(stmts, options, low, people, priors):
     return {'answer': ans, 'option': lab, 'status': 'claims', 'explanation': '\n'.join(lines)}
 
 
+def settled(r) -> bool:
+    """Data sufficiency: one relation with its gender fixed by the statements (not by names); the side may stay open
+    ("grandmother" answers "how is P related to Q?", "son or daughter" does not)."""
+    if not r['questions'] or not r['questions'][-1]['answers']:
+        return False
+    q, a = r['questions'][-1], r['questions'][-1]['answers'][0]
+    genderless = (a.get('base') or a.get('key') or '').endswith('cousin')   # English has one word for both
+    return q['status'] in ('unique', 'side') and (genderless or (bool(a.get('gender')) and not a.get('assumed')))
+
+
 def _sufficiency(stmts, options, people, priors):
     parts = sorted({s['part'] for s in stmts if s.get('part')})
 
     def enough(sub):
-        r = solve(stmts, parts=set(sub), people=people, priors=priors)
-        if not r['questions'] or not r['questions'][-1]['answers']:
-            return False
-        return r['questions'][-1]['status'] == 'unique'
+        return settled(solve(stmts, parts=set(sub), people=people, priors=priors))
 
     alone = {k: enough([k]) for k in parts}
     together = enough(parts)

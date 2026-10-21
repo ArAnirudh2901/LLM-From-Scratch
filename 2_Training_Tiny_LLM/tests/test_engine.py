@@ -188,7 +188,7 @@ def test_format_round_trip():
 
 
 def test_rejects_bad_statements():
-    stmts, bad = parse('@0 father @0 ; @0 only uncle @1 ; @0 paternal son @1 ; ask @0 ; blah')
+    stmts, bad = parse('@0 father @0 ; @0 only friend @1 ; @0 paternal son @1 ; ask @0 ; blah')
     assert not stmts and len(bad) == 5
 
 

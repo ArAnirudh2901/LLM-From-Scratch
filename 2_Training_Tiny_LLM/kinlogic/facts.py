@@ -267,7 +267,7 @@ def _allowed(written: list[str], ents: list[str]) -> list[str]:
     if last == 'not':
         return ['only', *SIDES, *RELS]
     if last == 'only':
-        return _ONLY
+        return [*SIDES, *_ONLY]
     if last in SIDES:
         return _SIDED
     if last in KIN or last in NONKIN:
