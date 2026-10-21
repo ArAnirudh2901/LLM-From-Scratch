@@ -22,13 +22,14 @@ DEF_MARRIED = re.compile(rf'{E} (\S+) {E} {VERB} {E} is married to {E}')
 DEF_POSS = re.compile(rf"{E} (\S+) {E} {VERB} {E} is {E} 's {REL}")
 ASK = [re.compile(p) for p in (   # each: how is the first person related to the second?
     rf'how is {E} (?:related|connected) (?:to|with) {E}', rf'(?:what|who) is {E} to {E}', rf'{E} is related to {E} as',
-    rf'what is the relation(?:ship)? of {E} (?:to|with) {E}', rf'what is the relation(?:ship)? between {E} and {E}',
+    rf'relation(?:ship)? of {E} (?:to|with) {E}', rf'relation(?:ship)? between {E} and {E}',
     rf'in what way is {E} related to {E}', rf'find the relation of {E} (?:with|to) {E}', rf'what relation does {E} have with {E}',
     rf'which of the following is the relation of {E} to {E}', rf'how are {E} and {E} related', rf"{E} is {E} 's \?")]
 GENDER = re.compile(rf'{E} is (?:an? )?(female|male|woman|man|girl|boy|lady|gentleman)\b')
 FEMALE = {'female', 'woman', 'girl', 'lady'}
-WHICH = re.compile(rf'which (?:of the following|one|expression)[^?]*? (?:means|shows|indicates|represents|implies|denotes) '
-                   rf'(?:that )?{E} is (?:the )?{REL} of {E}')
+_WV = r'(?:(?:would|will|can|does) )?(?:means?|shows?|indicates?|represents?|implies|imply|denotes?)'
+WHICH = re.compile(rf'which (?:of the following|one|expression)[^?]*? {_WV} (?:that )?{E} is (?:the )?{REL} of {E}')
+WHICH_POSS = re.compile(rf"which (?:of the following|one|expression)[^?]*? {_WV} (?:that )?{E} is {E} 's {REL}")
 
 
 def _rel(word):
@@ -106,13 +107,18 @@ def read(tokens) -> str | None:
     if not defs:
         return None
     runs = expressions(toks, defs)
-    w = WHICH.search(text)
-    if w and not runs:   # "which expression shows that P is Q's REL": the options are read one by one
-        p, rel, q = w.groups()
+    w, wp = WHICH.search(text), WHICH_POSS.search(text)
+    if w or wp:   # "which expression shows that P is Q's REL": the options are read one by one
+        p, rel, q = w.groups() if w else (wp.group(1), wp.group(3), wp.group(2))
         r = _rel(rel)
         return None if r is None else f"claim 1 ; {q} {(r[0] + ' ') if r[0] else ''}{r[1]} {p}"
+    asked = set(re.findall(r'@\d+', ' '.join(re.findall(r'(?:how is|what is|relation|between|related)[^?.]*', text))))
+    runs = [r for r in runs if len(set(r[::2]) & asked) >= 2] or runs   # options or page junk also look like expressions
     if len(runs) != 1:
-        return None
+        runs = sorted(runs, key=len)
+        if len(runs) < 2 or len(runs[-1]) == len(runs[-2]):
+            return None
+        runs = runs[-1:]
     people = set(runs[0][::2])
     extra = []
     rel_of = re.search(rf"how is {E} 's {REL} related to {E}", text)        # "how is R's husband related to H?"
