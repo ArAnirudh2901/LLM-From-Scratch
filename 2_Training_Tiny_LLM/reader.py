@@ -91,60 +91,119 @@ def collate(batch, pad: int, device, mult: int = 16):
     return idx.to(device), tgt.to(device), lm.to(device)
 
 
+def _allowed_ids(vocab: Vocab, written, ents):
+    return [vocab.stoi['<sep>' if a == ';' else a] for a in allowed_next(written, ents) if ('<sep>' if a == ';' else a) in vocab.stoi]
+
+
+def _prefix(model, vocab: Vocab, chunk, device, max_new):
+    pre = [[vocab.stoi['<bos>']] + vocab.encode(t) + [vocab.stoi['<c>']] for t in chunk]
+    pre = [p[-(model.block_size - max_new):] for p in pre]
+    plen = torch.tensor([len(p) for p in pre], device=device)
+    idx = torch.full((len(pre), int(plen.max())), vocab.stoi['<pad>'], dtype=torch.long)
+    for i, p in enumerate(pre):
+        idx[i, :len(p)] = torch.tensor(p)
+    cache, logits = encode_prefix(model, idx.to(device), plen)
+    ents = [list(dict.fromkeys(t for t in toks if t[0] == '@' and t in vocab.stoi)) for toks in chunk]
+    return [list(kv) for kv in cache], logits, plen, idx.size(1), ents
+
+
+def _step(model, cache, tok, pos, plen, P, G):
+    """One new token per row, attending to the row's prefix (first plen of P positions) and its G written tokens."""
+    device = tok.device
+    x = model.tok_emb(tok[:, None]) + model.pos_emb(pos.clamp(max=model.block_size - 1)[:, None])
+    mask = torch.cat([torch.arange(P, device=device)[None, :] < plen[:, None],
+                      torch.ones(len(tok), G, dtype=torch.bool, device=device)], 1)[:, None, None, :]
+    for li, blk in enumerate(model.blocks):
+        q, k, v = _heads(blk.attn, blk.ln1(x))
+        cache[li][0] = torch.cat([cache[li][0], k], 2)
+        cache[li][1] = torch.cat([cache[li][1], v], 2)
+        y = F.scaled_dot_product_attention(q, cache[li][0], cache[li][1], attn_mask=mask)
+        x = x + blk.attn.proj(y.transpose(1, 2).reshape(x.shape))
+        x = x + blk.ffn(blk.ln2(x))
+    return model.head(model.ln_f(x[:, 0])).float()
+
+
+def _text(written):
+    w = list(written)
+    while w and w[-1] == ';':
+        w.pop()
+    return ' '.join(w)
+
+
 @torch.no_grad()
-def decode(model, vocab: Vocab, inputs: list[list[str]], device, max_new: int = 96, bs: int = 64) -> list[str]:
-    """Greedy facts for each question (token lists from prepare), only ever writing valid statements."""
+def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, sample: bool = False,
+             temperature: float = 1.0, max_new: int = 96, bs: int = 32) -> list[list[tuple[str, float]]]:
+    """Fact readings for each question, only ever writing valid statements.
+    Beam search (k best, by mean log-probability per token) or k samples (for reinforcement learning).
+    Returns, per question, [(facts, score)] best first (samples in drawing order)."""
     model.eval()
+    sep, eos = vocab.stoi['<sep>'], vocab.stoi['<eos>']
     out = []
-    sep, eos, pad = vocab.stoi['<sep>'], vocab.stoi['<eos>'], vocab.stoi['<pad>']
     for b in range(0, len(inputs), bs):
         chunk = inputs[b:b + bs]
-        pre = [[vocab.stoi['<bos>']] + vocab.encode(t) + [vocab.stoi['<c>']] for t in chunk]
-        pre = [p[-(model.block_size - max_new):] for p in pre]
-        plen = torch.tensor([len(p) for p in pre], device=device)
-        idx = torch.full((len(pre), int(plen.max())), pad, dtype=torch.long)
-        for i, p in enumerate(pre):
-            idx[i, :len(p)] = torch.tensor(p)
-        idx = idx.to(device)
-        cache, logits = encode_prefix(model, idx, plen)
-        cache = [list(kv) for kv in cache]
-        P = idx.size(1)
-        ents = [list(dict.fromkeys(t for t in toks if t[0] == '@' and t in vocab.stoi)) for toks in chunk]
-        written = [[] for _ in chunk]
-        done = [False] * len(chunk)
+        cache, logits, plen, P, ents = _prefix(model, vocab, chunk, device, max_new)
+        width = k
+        rows = torch.arange(len(chunk), device=device)
+        if sample:   # k independent samples per question
+            rows = rows.repeat_interleave(k)
+        hyps = [(int(r), [], 0.0, 0) for r in rows.tolist()]   # (question, written, log-prob, tokens)
+        cache = [[kv[0][rows], kv[1][rows]] for kv in cache]
+        logits, plen_h = logits[rows], plen[rows]
+        done = [[] for _ in chunk]
         for step in range(max_new):
-            lg = logits.float().cpu()
-            nxt = []
-            for i in range(len(chunk)):
-                if done[i]:
-                    nxt.append(pad)
-                    continue
-                allowed = [vocab.stoi['<sep>' if a == ';' else a] for a in allowed_next(written[i], ents[i])
-                           if ('<sep>' if a == ';' else a) in vocab.stoi]
-                best = allowed[int(lg[i, allowed].argmax())]
-                if best == eos or step == max_new - 1:
-                    done[i] = True
+            lp = torch.log_softmax(logits / (temperature if sample else 1.0), -1).cpu()
+            cand = []   # (question, parent row, token, new log-prob)
+            for h, (qi, written, score, n) in enumerate(hyps):
+                allowed = _allowed_ids(vocab, written, ents[qi])
+                a = torch.tensor(allowed)
+                la = lp[h, a] - torch.logsumexp(lp[h, a], 0)   # renormalised over what the grammar allows
+                if sample:
+                    t = int(a[torch.multinomial(la.exp(), 1)])
+                    cand.append((qi, h, t, score + float(la[allowed.index(t)])))
                 else:
-                    written[i].append(';' if best == sep else vocab.itos[best])
-                nxt.append(best)
-            if all(done):
+                    top = la.topk(min(width, len(allowed)))
+                    cand += [(qi, h, int(a[i]), score + float(v)) for v, i in zip(top.values, top.indices)]
+            keep = []
+            if sample:
+                keep = cand
+            else:
+                by_q = {}
+                for c in cand:
+                    by_q.setdefault(c[0], []).append(c)
+                for qi, cs in by_q.items():
+                    cs.sort(key=lambda c: -c[3])
+                    keep += cs[:width]
+            nxt_hyps, parents, toks = [], [], []
+            for qi, h, t, sc in keep:
+                written, n = hyps[h][1], hyps[h][3] + 1
+                if t == eos or step == max_new - 1:
+                    done[qi].append((_text(written), sc / n))
+                    continue
+                nxt_hyps.append((qi, written + [';' if t == sep else vocab.itos[t]], sc, n))
+                parents.append(h)
+                toks.append(t)
+            if not sample:   # a question stops once it has k finished readings
+                full = {qi for qi in range(len(chunk)) if len(done[qi]) >= width}
+                sel = [i for i, hy in enumerate(nxt_hyps) if hy[0] not in full]
+                nxt_hyps, parents, toks = [nxt_hyps[i] for i in sel], [parents[i] for i in sel], [toks[i] for i in sel]
+            if not nxt_hyps:
                 break
-            tok = torch.tensor(nxt, device=device)[:, None]
-            pos = (plen + step).clamp(max=model.block_size - 1)[:, None]
-            x = model.tok_emb(tok) + model.pos_emb(pos)
-            G = step + 1
-            mask = torch.cat([torch.arange(P, device=device)[None, :] < plen[:, None],
-                              torch.ones(len(chunk), G, dtype=torch.bool, device=device)], 1)[:, None, None, :]
-            for li, blk in enumerate(model.blocks):
-                q, k, v = _heads(blk.attn, blk.ln1(x))
-                cache[li][0] = torch.cat([cache[li][0], k], 2)
-                cache[li][1] = torch.cat([cache[li][1], v], 2)
-                y = F.scaled_dot_product_attention(q, cache[li][0], cache[li][1], attn_mask=mask)
-                x = x + blk.attn.proj(y.transpose(1, 2).reshape(x.shape))
-                x = x + blk.ffn(blk.ln2(x))
-            logits = model.head(model.ln_f(x[:, 0]))
-        for w in written:
-            while w and w[-1] == ';':
-                w.pop()
-            out.append(' '.join(w))
+            pidx = torch.tensor(parents, device=device)
+            cache = [[kv[0][pidx], kv[1][pidx]] for kv in cache]
+            plen_h = plen_h[pidx]
+            hyps = nxt_hyps
+            logits = _step(model, cache, torch.tensor(toks, device=device), plen_h + step, plen_h, P, step + 1)
+        for qi in range(len(chunk)):
+            res = done[qi]
+            if not sample:   # best first, one entry per distinct reading
+                best = {}
+                for f, sc in res:
+                    best[f] = max(sc, best.get(f, float('-inf')))
+                res = sorted(best.items(), key=lambda d: -d[1])[:width]
+            out.append(res or [('', float('-inf'))])
     return out
+
+
+def decode(model, vocab: Vocab, inputs: list[list[str]], device, max_new: int = 96, bs: int = 64) -> list[str]:
+    """Greedy facts for each question."""
+    return [r[0][0] for r in generate(model, vocab, inputs, device, k=1, max_new=max_new, bs=bs)]

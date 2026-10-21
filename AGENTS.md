@@ -54,7 +54,8 @@ into family facts; the **engine** (`kinlogic/`, pure Python, exact) builds every
 | `kinlogic/generate.py` | synthetic exam questions with exact facts (statements, nested, speech, identity, introduce, coded, puzzle, sufficiency, claims, story) |
 | `kinlogic/clutrr.py` | CLUTRR stories -> facts (`data/clutrr_facts/`) |
 | `kinlogic/exam.py`, `explain.py` | whole exam question -> option + worked solution |
-| `reader.py`, `train_reader.py` | vocab, encoding, cached constrained decoding; training (fp16 on CUDA, resume, eval) |
+| `reader.py`, `train_reader.py` | vocab, encoding, cached constrained greedy/beam/sampling; supervised training (fp16 on CUDA, resume, eval) |
+| `train_rl.py` | GRPO after supervised training: 8 sampled readings per question, engine-scored reward, KL to the supervised model |
 | `eval/` | `exam_set.py` (hand-written, never trained on), `evaluate.py` (exam, CLUTRR test, RiddleBench, generated) |
 | `colab/train_reader_colab.ipynb` | free-T4 training: clones branch `v9-reader` of Kinthread-llm-model |
 

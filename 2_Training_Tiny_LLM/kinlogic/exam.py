@@ -128,12 +128,27 @@ def answer(text: str, read, priors: dict | None = None) -> dict:
 
 
 def _answer(text: str, read, priors: dict | None = None) -> dict:
+    """read may return one reading per question or several (best first). Readings are tried in order and the first
+    the engine accepts wins: it parses, does not contradict itself, asks something, and (with options) picks one."""
     p = prepare(text)
+    got = read([p['tokens']])[0]
+    readings = [got] if isinstance(got, str) else [g[0] if isinstance(g, tuple) else g for g in got]
+    first = None
+    for k, lf in enumerate(readings):
+        res = _answer_one(p, lf, read, priors)
+        res['reading'] = k
+        if first is None:
+            first = res
+        if res['status'] not in ('error', 'contradiction', 'none') and (res['option'] or not p['options']):
+            return res
+    return first
+
+
+def _answer_one(p, lf, read, priors):
     ents, options = p['ents'], p['options']
     priors = {**name_priors(ents), **(priors or {})}
     names = {e['id']: e['text'] for e in ents}
     people = [e['id'] for e in ents]
-    lf = read([p['tokens']])[0]
     stmts, _ = parse(lf)
     out = {'facts': lf, 'options': options}
     low = p['question'].lower()
@@ -147,6 +162,9 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
     r = solve(stmts, people=people, priors=priors)
     if not r['questions']:
         return {**out, 'answer': 'no question found', 'option': None, 'status': 'none', 'explanation': ''}
+    if not r['ok']:
+        return {**out, 'answer': 'contradiction', 'option': None, 'status': 'contradiction',
+                'explanation': 'The facts as read contradict each other.'}
     q = r['questions'][-1]
     qi = len(r['questions']) - 1
     t = q['q']['t']
@@ -260,7 +278,7 @@ def _which_expression(p, stmts, read, priors):
     texts = [f"{defs} In the expression '{o}', how is {names.get(c['y'], c['y'])} related to {names.get(c['x'], c['x'])}?"
              for _, o in p['options']]
     preps = [prepare(t) for t in texts]
-    lfs = read([pp['tokens'] for pp in preps])
+    lfs = [g if isinstance(g, str) else (g[0][0] if isinstance(g[0], tuple) else g[0]) for g in read([pp['tokens'] for pp in preps])]
     ok = []
     for (lab, o), pp, lf in zip(p['options'], preps, lfs):
         by = {e['text']: e['id'] for e in pp['ents']}

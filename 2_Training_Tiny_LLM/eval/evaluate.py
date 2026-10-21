@@ -21,7 +21,7 @@ from kinlogic.engine import solve
 from kinlogic.exam import answer
 from kinlogic.facts import parse
 from model_gpt import GPT
-from reader import Vocab, decode
+from reader import Vocab, decode, generate
 from train import get_device
 
 RIDDLE_URL = 'https://huggingface.co/datasets/ai4bharat/RiddleBench/resolve/main/data/train-00000-of-00001.parquet'
@@ -102,13 +102,15 @@ def main():
     ap.add_argument('--ckpt', default='runs/reader-v9/best.pt')
     ap.add_argument('--sets', default='exam,clutrr,riddle,generated')
     ap.add_argument('--out', default=None, help='write the results as JSON here')
+    ap.add_argument('--beam', type=int, default=4, help='readings tried per exam question (best first)')
     a = ap.parse_args()
     device = get_device()
     model, vocab = load(a.ckpt, device)
     read = lambda batch: decode(model, vocab, batch, device)
+    beam = lambda batch: generate(model, vocab, batch, device, k=a.beam)   # several readings, the engine picks
     res = {}
     for s in a.sets.split(','):
-        res.update({'exam': lambda: eval_exam(read), 'clutrr': lambda: eval_clutrr(read), 'riddle': lambda: eval_riddle(read),
+        res.update({'exam': lambda: eval_exam(beam), 'clutrr': lambda: eval_clutrr(read), 'riddle': lambda: eval_riddle(beam),
                     'generated': lambda: eval_generated(model, vocab, device)}[s]())
         print(json.dumps({k: v for k, v in res.items() if not k.endswith('misses')}, indent=1), flush=True)
     if a.out:
