@@ -299,8 +299,8 @@ def main():
     if pool:
         import hashlib
         sig = hashlib.sha1(''.join(r['lf'] for r in pool['dev'][:600]).encode()).hexdigest()[:12]
-        if sched.get('dev_sig') not in (None, sig):   # scores on another dev set are not comparable
-            print(f"deep dev set changed ({sched['dev_sig']} -> {sig}): best score and patience reset", flush=True)
+        if ck is not None and sched.get('dev_sig') != sig:   # scores on another dev set (or an unsigned one) are not comparable
+            print(f"deep dev set changed ({sched.get('dev_sig')} -> {sig}): best score and patience reset", flush=True)
             best, sched['flat'] = -1.0, 0
         sched['dev_sig'] = sig
         print(f"pool: {sum(map(len, pool['kinds'].values()))} kind questions, {sum(map(len, pool['deep'].values()))} deep, "
