@@ -65,15 +65,16 @@ def eval_clutrr(read, path='data/clutrr_facts/test.jsonl.gz', n=None):
     preds = read([r['tokens'] for r in rows])
     hit = ceil = 0
     by_k = {}
+    def right(lf):   # gender-open answers count when their neutral word is the label; no answer never counts
+        got, v = first(lf)
+        return got == r['answer'] or bool(v and v.get('neutral') == r['answer'])
+
     for r, p in zip(rows, preds):
-        got, v = first(p)
-        gold, gv = first(r['lf'])
-        keys = [r['answer'], (gv or {}).get('neutral')]
-        ok = got in keys or (v and v.get('neutral') == r['answer'])
-        hit += bool(ok)
-        ceil += gold == r['answer'] or (gv and gv.get('neutral') == r['answer'])
+        ok = right(p)
+        hit += ok
+        ceil += right(r['lf'])
         k = by_k.setdefault(r['k'], [0, 0])
-        k[0] += bool(ok); k[1] += 1
+        k[0] += ok; k[1] += 1
     return {'clutrr_acc': hit / len(rows), 'clutrr_ceiling': ceil / len(rows),
             'clutrr_by_steps': {k: round(a / b, 3) for k, (a, b) in sorted(by_k.items())}}
 
