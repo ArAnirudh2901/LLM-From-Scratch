@@ -45,15 +45,19 @@ def first(lf, people=()):
 
 
 def eval_exam(read):
-    from eval.exam_set import Q
-    right, misses = 0, []
+    from eval.exam_set import Q, split
+    score = {'dev': [0, 0], 'test': [0, 0]}
+    misses = []
     for item in Q:
         r = answer(item['text'], read)
         ok = r['option'] == item['expect']
-        right += ok
+        s = score[split(item)]
+        s[0] += ok; s[1] += 1
         if not ok:
-            misses.append((item['id'], r['option'], item['expect'], r['facts']))
-    return {'exam': f'{right}/{len(Q)}', 'exam_acc': right / len(Q), 'exam_misses': misses[:15]}
+            misses.append((item['id'], split(item), r['option'], item['expect'], r['facts']))
+    right = score['dev'][0] + score['test'][0]
+    return {'exam': f'{right}/{len(Q)}', 'exam_acc': right / len(Q), 'exam_dev_acc': score['dev'][0] / score['dev'][1],
+            'exam_test_acc': score['test'][0] / score['test'][1], 'exam_misses': misses[:20]}
 
 
 def eval_clutrr(read, path='data/clutrr_facts/test.jsonl.gz', n=None):

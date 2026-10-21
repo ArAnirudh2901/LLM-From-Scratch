@@ -89,3 +89,4 @@ Python with torch: `.venv/bin/python` in this repo (needs pandas + pyarrow for t
   progress follower, resumable downloads, share links and contradiction checks; its `vendor/kinship/` equals
   `2_Training_Tiny_LLM/web` here (SHA-256 manifest).
 - 2026-10-21: v9 pipeline built (kinlogic engine, generator, reader training, eval, Colab notebook); not trained yet.
+- 2026-10-21: audit fixes: RiddleBench 'A.V | B.O' options when the text starts with 'A family'; generations check with unlinked groups; puzzle member list vs stray placeholders; pair and data-sufficiency answers in eval/RL rewards; lexicon coverage test (rebuild with `python -m kinlogic.lexicon` after generator changes); new generated forms (addressee 'your', 'said to her husband', 'this man's', relative clauses, plural children, elder/younger); readings vote by confidence; exam set split dev/test (only dev guides choices).

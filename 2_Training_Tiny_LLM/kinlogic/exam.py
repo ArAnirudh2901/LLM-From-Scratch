@@ -128,28 +128,62 @@ def answer(text: str, read, priors: dict | None = None) -> dict:
 
 
 def _answer(text: str, read, priors: dict | None = None) -> dict:
-    """read may return one reading per question or several (best first). Readings are tried in order and the first
-    the engine accepts wins: it parses, does not contradict itself, asks something, and (with options) picks one."""
+    """read may return one reading per question or several, best first, optionally with scores (mean log-probability
+    per token). Every reading is solved; readings that fail (contradiction, no question) drop out; the rest vote for
+    their option, weighted by the reader's confidence. confidence: the winning option's share of the votes."""
+    import math
     p = prepare(text)
     got = read([p['tokens']])[0]
-    readings = [got] if isinstance(got, str) else [g[0] if isinstance(g, tuple) else g for g in got]
-    first = None
-    for k, lf in enumerate(readings):
+    readings = [(got, 0.0)] if isinstance(got, str) else [(g, 0.0) if isinstance(g, str) else (g[0], g[1]) for g in got]
+    results = []
+    for k, (lf, score) in enumerate(readings):
         res = _answer_one(p, lf, read, priors)
         res['reading'] = k
-        if first is None:
-            first = res
-        if res['status'] not in ('error', 'contradiction', 'none') and (res['option'] or not p['options']):
-            return res
-    return first
+        results.append((res, score))
+    good = [(r, sc) for r, sc in results if r['status'] not in ('error', 'contradiction', 'none')]
+    if not good:
+        return {**results[0][0], 'confidence': 0.0}
+    top = max(sc for _, sc in good)
+    weights = [math.exp(8 * (sc - top)) for _, sc in good]   # sharper than the raw per-token average
+    votes = {}
+    for (r, _), wt in zip(good, weights):
+        key = r['option'] if p['options'] else r['answer']
+        if key is not None:
+            votes[key] = votes.get(key, 0.0) + wt
+    if not votes:
+        return {**good[0][0], 'confidence': 0.0}
+    best = max(votes, key=lambda k: (votes[k], -next(i for i, (r, _) in enumerate(good) if (r['option'] if p['options'] else r['answer']) == k)))
+    winner = next(r for r, _ in good if (r['option'] if p['options'] else r['answer']) == best)
+    return {**winner, 'confidence': round(votes[best] / sum(weights), 3)}
+
+
+def _people(tokens, stmts):
+    """Who belongs to a closed family: the placeholders of the member list (the first sentence naming three or more)
+    and everyone the facts mention; a stray capitalized word elsewhere is not a member."""
+    if not any(s['t'] == 'members' for s in stmts):
+        return []
+    out, sent = [], []
+    for t in tokens + ['.']:
+        if t in ('.', '?', '!'):
+            if len(set(sent)) >= 3:
+                out = list(dict.fromkeys(sent))
+                break
+            sent = []
+        elif t[0] == '@':
+            sent.append(t)
+    for s in stmts:
+        for k in ('x', 'y'):
+            if s.get(k, '').startswith('@') and s[k] not in out:
+                out.append(s[k])
+    return out
 
 
 def _answer_one(p, lf, read, priors):
     ents, options = p['ents'], p['options']
     priors = {**name_priors(ents), **(priors or {})}
     names = {e['id']: e['text'] for e in ents}
-    people = [e['id'] for e in ents]
     stmts, _ = parse(lf)
+    people = _people(p['tokens'], stmts)
     out = {'facts': lf, 'options': options}
     low = p['question'].lower()
 

@@ -232,3 +232,9 @@ def gold_facts(item, ents):
         else:
             out.append(t)
     return ' '.join(out)
+
+
+def split(item) -> str:
+    """'dev' (may guide choices, e.g. supervised vs RL) or 'test' (locked: only reported). Fixed by id."""
+    import zlib
+    return 'dev' if zlib.crc32(item['id'].encode()) % 2 == 0 else 'test'

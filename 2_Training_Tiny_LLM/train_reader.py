@@ -65,14 +65,28 @@ def dev_set(n, seed=999):
 
 
 def answers(lf, people=()):
-    """The main answer(s) a fact text leads to: one key per question, plus claim verdicts."""
+    """What a fact text leads to, as one comparable value: each question's first answer (for "which pair": every
+    pair of members that qualifies), each claim's verdict, and for data sufficiency which statements suffice alone."""
+    from kinlogic.engine import pair_holds
     stmts, _ = parse(lf)
     try:
         r = solve(stmts, people=people, max_steps=5000)
     except RecursionError:
         return None
-    keys = tuple(q['answers'][0]['key'] if q['answers'] else q['status'] for q in r['questions'])
-    return keys + tuple(sorted(r['claims'].items()))
+    keys = []
+    for q in r['questions']:
+        if q['q']['t'] == 'pair':
+            ids = [e for e in r['ids'] if e.startswith('@')]
+            pairs = sorted((a, b) for i, a in enumerate(ids) for b in ids[i + 1:]
+                           if r['worlds'] and all(pair_holds(w, q['q']['what'], r['ids'][a], r['ids'][b]) for w in r['worlds']))
+            keys.append(('pair', tuple(pairs)))
+        else:
+            keys.append(q['answers'][0]['key'] if q['answers'] else q['status'])
+    parts = sorted({s['part'] for s in stmts if s.get('part')})
+    for k in parts:   # data sufficiency: does each statement alone give one answer?
+        rk = solve(stmts, parts={k}, people=people, max_steps=5000)
+        keys.append(('alone', k, bool(rk['questions']) and rk['questions'][-1]['status'] == 'unique'))
+    return tuple(keys) + tuple(sorted(r['claims'].items()))
 
 
 def canon(lf):
@@ -137,9 +151,10 @@ def main():
     ap.add_argument('--amp', action='store_true', help='fp16 mixed precision on CUDA (weights stay fp32)')
     ap.add_argument('--compile', action='store_true')
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--cpu', action='store_true')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    device = get_device()
+    device = get_device(force_cpu=a.cpu)
     torch.manual_seed(a.seed)
     latest, best_path = os.path.join(a.out, 'latest.pt'), os.path.join(a.out, 'best.pt')
 

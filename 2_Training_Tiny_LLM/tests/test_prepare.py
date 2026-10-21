@@ -68,3 +68,30 @@ def test_numbered_statements_are_not_options():
     r = prepare('A is the father of B. Which is true? I. B is a son. II. A is male. III. B is A\'s child. IV. A has a son. V. B is female.')
     assert [e['text'] for e in r['ents']] == ['A', 'B']
     assert toks('Hunter wrote to his mother Diana.') == '@0 wrote to his mother @1 .'
+
+
+def test_lexicon_covers_generated_words():
+    """Rebuild with `python -m kinlogic.lexicon` after changing the generator: an unknown sentence-initial word
+    would be taken for a name."""
+    import random
+    import re
+    from kinlogic import generate
+    from kinlogic.prepare import LEXICON, TOKEN_RE
+    rng = random.Random(1)
+    missing = set()
+    for _ in range(3000):
+        ex = generate.sample(rng)
+        names = {r.lower() for r in ex['names'].values()}
+        for t in TOKEN_RE.findall(ex['text']):
+            w = t.lower()
+            if len(w) > 1 and re.fullmatch(r"[a-z][a-z'-]*", w) and all(len(x) > 1 for x in w.split('-')) and w not in names and w not in LEXICON and w not in {p.lower() for p in generate.PLACES}:
+                missing.add(w)
+    assert not missing, sorted(missing)[:20]
+
+
+def test_pipe_options_riddlebench_style():
+    r = prepare('A family consists of three members - G, K and L. Who is the mother of K? A.G | B.L | C.None of the above')
+    assert r['options'] == [('a', 'G'), ('b', 'L'), ('c', 'None of the above')]
+    assert r['tokens'][:2] == ['a', 'family']
+    r = prepare('How is W related to K in J@K!T*W?X#Z. A. Sister|B. Daughter|C. Son')
+    assert r['options'] == [('a', 'Sister'), ('b', 'Daughter'), ('c', 'Son')]

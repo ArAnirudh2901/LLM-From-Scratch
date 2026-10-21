@@ -446,8 +446,11 @@ def _finish(w, run: _Run):
                             continue
                         if any(len(w6.relatives(ids[f['x']], f['r'], f.get('side'))) != f['n'] for f in run.has):
                             continue
-                        if run.generations and _generations(w6, run) != run.generations:
-                            continue
+                        if run.generations:
+                            span, parts = _generations(w6, run)
+                            # separate groups may sit on any levels relative to each other: only too many is wrong
+                            if span > run.generations or (parts == 1 and span != run.generations):
+                                continue
                         yield w6
 
 
@@ -622,11 +625,12 @@ def _gender_totals(w, run: _Run):
             yield w2
 
 
-def _generations(w, run: _Run) -> int:
-    """Generations spanned by the members (parents one level up, spouses on the same level)."""
+def _generations(w, run: _Run) -> tuple[int, int]:
+    """(generations spanned by the largest connected group of members, number of groups); parents one level up,
+    spouses on the same level."""
     members = set(_members(w, run))
     level, todo = {}, []
-    span = 0
+    span, parts = 0, 0
     for start in members:
         if start in level:
             continue
@@ -643,7 +647,8 @@ def _generations(w, run: _Run) -> int:
                     comp.append(y)
         levels = [level[m] for m in comp if m in members]
         span = max(span, max(levels) - min(levels) + 1)
-    return span
+        parts += 1
+    return span, parts
 
 
 def _members(w, run):

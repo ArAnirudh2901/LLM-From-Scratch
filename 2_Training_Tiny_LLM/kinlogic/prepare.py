@@ -91,12 +91,15 @@ def split_options(text: str) -> tuple[str, list[tuple[str, str]]]:
     sentences ("1. A is the father of B.") are statements of the question, not options. Returns (question, options)."""
     q = text.rfind('?')
     head, tail = (text[:q + 1], text[q + 1:]) if q >= 0 else ('', text)
-    if q >= 0 and tail.count('|') >= 1:   # "A.V | B.O | C.L" or "A D | B C"
-        chunks = [c.strip() for c in tail.split('|')]
-        parsed = [re.match(r'^\(?([a-eA-E1-5])\s*[.):]?\s*(.+)$', c) for c in chunks]
-        labels = [m.group(1).lower() for m in parsed if m]
-        if all(parsed) and labels[0] in ('a', '1') and all(ord(b) == ord(a) + 1 for a, b in zip(labels, labels[1:])):
-            return head.strip(), [(m.group(1).lower(), m.group(2).strip()) for m in parsed]
+    if '|' in text:   # "A.V | B.O | C.L" or "A D | B C" (also when "?" is a code symbol inside the question)
+        bar = text.index('|')
+        starts = [m.start(1) for m in re.finditer(r'(?:^|[\s.?])(\(?[aA1](?:[.):]\s*|\s))', text[:bar])]
+        for st in reversed(starts):
+            chunks = [c.strip() for c in text[st:].split('|')]
+            parsed = [re.match(r'^\(?([a-eA-E1-5])\s*[.):]?\s*(.+)$', c) for c in chunks]
+            labels = [m.group(1).lower() for m in parsed if m]
+            if all(parsed) and labels[0] in ('a', '1') and all(ord(b) == ord(a) + 1 for a, b in zip(labels, labels[1:])):
+                return text[:st].strip(), [(m.group(1).lower(), m.group(2).strip()) for m in parsed]
     marks = list(_OPTION_START.finditer(tail))
     found = []
     for start in range(len(marks)):

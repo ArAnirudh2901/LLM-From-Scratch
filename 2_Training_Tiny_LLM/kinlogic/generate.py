@@ -307,9 +307,15 @@ def rel_phrase(word, side=None, only=False):
     return ' '.join(w for w in ('only' if only else None, side, word) if w)
 
 
+AGE = {'brother': ['elder', 'younger'], 'sister': ['elder', 'younger'], 'son': ['elder', 'younger', 'eldest', 'youngest'],
+       'daughter': ['elder', 'younger', 'eldest', 'youngest']}
+
+
 def state(rng, x: str, y: str, word: str, side=None, only=False) -> str:
-    """ "y is x's word" in one of the ways exam papers say it."""
+    """ "y is x's word" in one of the ways exam papers say it ("elder"/"younger" may be added: no new fact)."""
     rp = rel_phrase(word, side, only)
+    if word in AGE and not only and not side and rng.random() < 0.08:
+        rp = f'{rng.choice(AGE[word])} {word}'
     forms = [f'{y} is the {rp} of {x}', f'{y} is the {rp} of {x}', f"{y} is {poss(x)} {rp}", f"{poss(x)} {rp} is {y}",
              f'The {rp} of {x} is {y}']
     if not only:
@@ -463,8 +469,24 @@ def q_statements(rng) -> dict | None:
         x, y, word, side = fact_for(q, run, n, m)
         rx, ry = q.ref(x), q.ref(y)
         clauses.append((state(rng, rx.surface, ry.surface, word, side), [F(rx, word, ry, side)]))
+    w = fam.w
+    for x in [r.node for r in list(q.refs.values())]:   # "X has two sons, Y and Z" / "Y and Z are the parents of X"
+        if rng.random() < 0.12:
+            for word in ('son', 'daughter'):
+                kids = w.relatives(x, word)
+                if len(kids) >= 2:
+                    rx, ks = q.ref(x), [q.ref(k) for k in kids[:3]]
+                    clauses.append((f'{rx.surface} has {NUM[len(ks)]} {PLURAL[word]}, {_listing(rng, [k.surface for k in ks])}',
+                                    [F(rx, word, k) for k in ks]))
+                    break
+        elif rng.random() < 0.06 and w.father(x) >= 0 and w.mother(x) >= 0:
+            rx, rf, rm = q.ref(x), q.ref(w.father(x)), q.ref(w.mother(x))
+            clauses.append((rng.choice([f'{rf.surface} and {rm.surface} are the parents of {rx.surface}',
+                                        f"{poss(rx.surface)} parents are {rf.surface} and {rm.surface}"]),
+                            [F(rx, 'parent', rf), F(rx, 'parent', rm)]))
     if rng.random() < 0.4:
         rng.shuffle(clauses)
+    clauses = _relative_clauses(rng, clauses)
     ra, rb = q.ref(a), q.ref(b)
     if rng.random() < 0.5:
         ra, rb = rb, ra
@@ -484,6 +506,24 @@ def q_statements(rng) -> dict | None:
         q.add(ask_text(rng, ra.surface, rb.surface), [{'t': 'ask', 'x': ra, 'y': rb}])
     t = fam.truth(ra.node, rb.node)
     return q.finish('statements', options_for(rng, t['label']) if rng.random() < 0.35 else None, {'truth': t['key']})
+
+
+def _relative_clauses(rng, clauses):
+    """ "A is the father of B. B is the sister of C." -> "A is the father of B, who is the sister of C." """
+    out, i = [], 0
+    while i < len(clauses):
+        c1, f1 = clauses[i]
+        if i + 1 < len(clauses) and len(f1) == 1 and len(clauses[i + 1][1]) == 1 and rng.random() < 0.3:
+            c2, f2 = clauses[i + 1]
+            a, b = f1[0], f2[0]
+            # c1 says "a.y is the R of a.x"; c2 says "b.y is the R2 of b.x" with b.y == a.x
+            if a['t'] == b['t'] == 'rel' and b['y'] is a['x'] and c1 == f"{a['y'].surface} is the {rel_phrase(a['r'], a['side'])} of {a['x'].surface}":
+                out.append((f"{c1}, who is the {rel_phrase(b['r'], b['side'])} of {b['x'].surface}", f1 + f2))
+                i += 2
+                continue
+        out.append((c1, f1))
+        i += 1
+    return out
 
 
 def _hindi_facts(q: Q, rx: Ref, ry: Ref, word, hops):
@@ -639,6 +679,11 @@ def q_speech(rng) -> dict | None:
         rs = q.desc(s) if kinds[0] else q.ref(s)
         rp = q.desc(p) if kinds[1] else q.ref(p)
     he, him, his = PRON[fam.g(p)]
+    addressee = rng.random() < 0.2   # the speaker talks to the person: "you", "your"
+    if addressee:
+        he, his = 'you', 'your'
+    elif rp.kind == 'desc' and rng.random() < 0.25:
+        his = f'this {rp.head}' + "'s"   # "This man's son's sister is my mother-in-law"
     hops = fam.hops(s, p)
     quote = rng.choice([('"', '"'), ("'", "'"), ('“', '”')])
     form = rng.random()
@@ -646,10 +691,11 @@ def q_speech(rng) -> dict | None:
     if form < 0.45 or len(hops) < 2:   # "He is the son of my father's only brother."
         words = _run_words(q, s, chunks(hops, rng, 0.3))
         np_ = _np(rng, 'my', _phrase(words))
-        utter = f'{cap(he)} is {np_}.'
+        utter = f"{cap(he)} {'are' if addressee else 'is'} {np_}."
         f2, _ = _np_facts(q, rs, words, rp)
         facts += f2
-        ev.append(rp)
+        if not addressee:
+            ev.append(rp)
     else:   # "His mother is the only daughter of my father." (meet in the middle)
         k = rng.randint(1, len(hops) - 1)
         m = hops[k - 1][1]
@@ -659,15 +705,37 @@ def q_speech(rng) -> dict | None:
             return None
         pw = _run_words(q, p, p_runs, 0)
         sw = _run_words(q, s, s_runs)
-        subj = his + ' ' + "'s ".join(_phrase(pw))
+        subj = (his[:-2] + "'s " if his.endswith("'s") else his + ' ') + "'s ".join(_phrase(pw))
         f_subj, head = _np_facts(q, rp, pw, None)
         pred = _np(rng, 'my', _phrase(sw))
         f_pred, _ = _np_facts(q, rs, sw, head)
         utter = f'{cap(subj)} is {pred}.'
         facts += f_subj + f_pred
-        ev.append(rp)
+        if not addressee and not his.startswith('this'):
+            ev.append(rp)
     open_ = rng.choice(SPEECH_OPEN)
-    bare_photo = rp.kind == 'desc' and rng.random() < 0.2
+    if addressee:
+        open_ = rng.choice(['{S} said to {P}, {U}', '{S} told {P}, {U}', 'Looking at {P}, {S} said, {U}'])
+    side = []   # someone the speaker talks to or introduces to: "said to her husband"
+    if not addressee and rng.random() < 0.2:
+        _, _, sh = PRON[fam.g(s)]
+        rel = [(m, mv) for m in fam.people if m not in (s, p) and len(mv := fam.hops(s, m)) == 1 and mv[0][0] in ('S', 'D', 'U')]
+        if rel and rng.random() < 0.7:
+            m, mv = rng.choice(rel)
+            word = word_for(('S',) if mv[0][0] == 'S' else (mv[0][0],), fam.g(m))
+            side = [F(rs, word, q.anon(m))]
+        else:
+            word = rng.choice(['friend', 'neighbour', 'colleague'])
+            side = [F(rs, word, Ref(None, None, 'anon'))]
+        if '{S} said' in open_:
+            open_ = open_.replace('{S} said', '{S} said to ' + sh + ' ' + word)
+        elif open_.startswith('Introducing {P},'):
+            open_ = open_.replace('Introducing {P},', 'Introducing {P} to ' + sh + ' ' + word + ',')
+        else:
+            side = []
+        if side:
+            q.gendered.discard(rs)
+    bare_photo = rp.kind == 'desc' and not addressee and not side and rng.random() < 0.2
     if bare_photo:   # the person is first named in the question: "the man in the photograph"
         open_ = rng.choice(['Pointing to a photograph, {S} said, {U}', 'Looking at a photograph, {S} said, {U}',
                             'Showing a photograph to a friend, {S} said, {U}'])
@@ -677,8 +745,11 @@ def q_speech(rng) -> dict | None:
     if rs.kind == 'desc':
         ev.append(rs)
     ev = sorted(set(ev), key=order.index)   # gender facts in the order the text mentions people
+    if side and rs not in ev:
+        ev.append(rs)   # "her husband": the speaker's gender
+        ev = sorted(set(ev), key=order.index)
     sentence = open_.format(P=said.get(rp, rp.surface), S=said.get(rs, rs.surface), U=quote[0] + utter + quote[1])
-    q.add(cap(sentence), facts if not bare_photo else [], evidence=ev)
+    q.add(cap(sentence), side + (facts if not bare_photo else []), evidence=ev)
     if bare_photo:
         ref_p = q.say(rp, definite=True) + ' in the photograph'
     else:
@@ -689,7 +760,15 @@ def q_speech(rng) -> dict | None:
     if bare_photo:   # facts come from the quote, which the reader links to the question's "the man"
         q.facts += [G(rp, rp.g)] + facts
         q.gendered.add(rp)
-    if rng.random() < 0.65:
+    near = [m for m in fam.people if m not in (s, p) and len(fam.hops(s, m)) == 1 and m not in q.refs]
+    if near and not bare_photo and rng.random() < 0.15:   # "How is Tanya's husband related to the man?"
+        m = rng.choice(near)
+        mv = tuple(h for h, _ in fam.hops(s, m))
+        word = word_for(mv, fam.g(m))
+        rm = q.anon(m)
+        q.add(ask_text(rng, ref_p, f"{poss(ref_s)} {word}"), [F(rs, word, rm), {'t': 'ask', 'x': rp, 'y': rm}])
+        t = fam.truth(p, m)
+    elif rng.random() < 0.65:
         q.add(ask_text(rng, ref_s, ref_p), [{'t': 'ask', 'x': rs, 'y': rp}])
         t = fam.truth(s, p)
     else:
@@ -873,13 +952,14 @@ def q_puzzle(rng) -> dict | None:
     # clues: each member linked to someone already placed
     placed, clues = [order[0]], []
     for m in order[1:]:
-        cands = [p for p in placed if 1 <= len(fam.hops(p, m)) <= 2]
-        rng.shuffle(cands)
+        cands = sorted((p for p in placed if 1 <= len(fam.hops(p, m)) <= 3), key=lambda p: (len(fam.hops(p, m)), rng.random()))
         for p in cands:
             c = _clue(q, p, m)
             if c:
                 clues.append(c)
                 break
+        else:
+            return None   # someone the clues could not link: a real puzzle connects everyone
         placed.append(m)
     by = {r.node: r for r in refs}
     for _ in range(rng.choice([0, 1, 1, 2, 3])):   # extra clue kinds
