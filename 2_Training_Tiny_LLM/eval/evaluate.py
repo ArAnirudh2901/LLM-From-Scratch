@@ -118,17 +118,19 @@ def eval_deep(model, vocab, device, root='data/dataset'):
     rows = load_pool(root)['test'] if os.path.exists(f'{root}/test/deep.jsonl.gz') else []
     if not rows:
         return {'deep_acc': None}
+    from kinlogic.codes import read as read_code
+    from train_reader import answers
     r, preds = evaluate(model, vocab, device, rows)
-    ok = {}
-    for x, p in zip(rows, preds):
-        from train_reader import answers
+    ok, hits = {}, 0
+    for x, p in zip(rows, preds):   # the pipeline: coded questions are read exactly, the rest by the model
         people = sorted({t for t in x['tokens'] if t[0] == '@'})
-        hit = answers(p, people) == answers(x['lf'], people)
+        hit = answers(read_code(x['tokens']) or p, people) == answers(x['lf'], people)
+        hits += hit
         for k in (('depth', x['depth']), ('format', x['kind'])):
             a = ok.setdefault(k, [0, 0])
             a[0] += hit
             a[1] += 1
-    return {'deep_acc': r['answer'], 'deep_n': len(rows),
+    return {'deep_acc': round(hits / len(rows), 4), 'deep_model_acc': r['answer'], 'deep_n': len(rows),
             'deep_by_depth': {d: round(ok[('depth', d)][0] / ok[('depth', d)][1], 3) for d in sorted(d for t, d in ok if t == 'depth')},
             'deep_by_format': {f: round(a / b, 3) for (t, f), (a, b) in ok.items() if t == 'format'}}
 
