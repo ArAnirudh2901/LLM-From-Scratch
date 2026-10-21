@@ -181,6 +181,11 @@ def _clause(rng, q: Q, ch: Chain, seg):
 def f_statements(rng, ch: Chain):
     q = Q(rng, ch)
     clauses = [_clause(rng, q, ch, seg) for seg in segments(rng, ch)]
+    if rng.random() < 0.35 and all(f['t'] == 'rel' for _, f in clauses):   # natural prose, in chain order
+        from .prose import add_all
+        add_all(q, rng, [f for _, f in clauses], joint=lambda a, b, c: None not in (a.node, b.node, c.node) and
+                {ch.father(c.node), ch.mother(c.node)} == {a.node, b.node})
+        return _ask(rng, q, ch, 'deep-statements')
     if rng.random() < 0.4:
         rng.shuffle(clauses)
     if len(clauses) > 1 and rng.random() < 0.4:   # "A is the mother of B, B is the father of C and C is ..."

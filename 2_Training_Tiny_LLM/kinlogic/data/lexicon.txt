@@ -1,6 +1,7 @@
 a
 a-b
 a-d
+a-f
 a-h
 a-j
 a-o
@@ -186,6 +187,7 @@ b-f
 b-j
 b-u
 b-w
+b-y
 babies
 baby
 babysat
@@ -397,11 +399,15 @@ bye
 c-a-q
 c-d
 c-g
+c-h
 c-l
 c-m
 c-n
+c-o
 c-p
+c-r
 c-s
+c-w
 c-y
 c-z-b
 ca
@@ -627,6 +633,7 @@ cookiers
 cookies
 cooking
 cookout
+cooks
 cool
 cooled
 corn
@@ -849,6 +856,7 @@ during
 dye
 e-d
 e-f
+e-g
 e-h
 e-j
 e-m
@@ -1135,6 +1143,7 @@ frustrated
 fucked
 full
 fun
+function
 fundraiser
 fundraising
 funds
@@ -1371,7 +1380,9 @@ h-f
 h-m
 h-n
 h-r
+h-s
 h-t
+h-u
 h-u-s
 h-x
 h-z
@@ -1592,12 +1603,14 @@ j-b
 j-c
 j-c-d
 j-d-n
+j-h
 j-k
 j-k-l
 j-o
 j-s-u
 j-t
 j-u
+j-y
 jacket
 jackpot
 jacks
@@ -1618,6 +1631,7 @@ joke
 jokes
 jump
 just
+k-b
 k-c
 k-f
 k-h
@@ -1634,6 +1648,7 @@ keeping
 keeps
 keepsake
 kept
+keys
 kid
 kids
 kind
@@ -1711,6 +1726,7 @@ less
 lessons
 let
 letter
+letters
 letting
 library
 life
@@ -1765,10 +1781,13 @@ lucky
 lunch
 lure
 m-c
+m-h
 m-n
 m-r
 m-s
+m-t
 m-w
+m-z
 machine
 mad
 made
@@ -1785,6 +1804,7 @@ mama
 man
 manage
 manager
+mango
 manicure
 many
 marathon
@@ -1805,6 +1825,7 @@ mater
 materials
 maternal
 math
+mathematics
 matter
 matters
 mausi
@@ -1895,6 +1916,7 @@ n-h
 n-k
 n-m
 n-o
+n-s
 n-t
 n-x
 nachos
@@ -1970,11 +1992,14 @@ nurse
 nursing
 nurze
 o
+o-e
+o-f
 o-g
 o-k
 o-m
 o-p
 o-r
+o-s
 o-u
 o-v
 o-z
@@ -2252,6 +2277,7 @@ puts
 putt
 putting
 q-a
+q-b
 q-c
 q-f
 q-g
@@ -2442,6 +2468,7 @@ s-g
 s-j
 s-l
 s-m
+s-q
 s-r
 s-t
 s-t-u
@@ -2739,11 +2766,13 @@ stuck
 student
 students
 studied
+studies
 studio
 study
 studying
 stuff
 style
+subject
 successful
 such
 suddenly
@@ -2795,6 +2824,7 @@ t-h
 t-j
 t-j-u
 t-k
+t-l
 t-m
 t-n
 t-o
@@ -2846,6 +2876,7 @@ television
 tell
 telling
 tells
+temple
 ten
 tennis
 tension
@@ -2950,6 +2981,7 @@ trash
 travel
 traveled
 traveling
+travelled
 travels
 treasures
 treat
@@ -3037,6 +3069,8 @@ v-g
 v-j
 v-k
 v-l
+v-m
+v-o
 v-p
 v-s
 v-t
@@ -3072,9 +3106,12 @@ volunteer
 volunteered
 voted
 w-a
+w-d
+w-e
 w-g-b
 w-h
 w-k
+w-m
 w-r
 waffles
 wait
@@ -3172,6 +3209,7 @@ wondering
 wood
 wooden
 words
+wore
 work
 worked
 worker
@@ -3203,6 +3241,8 @@ x-y
 y-b
 y-j
 y-p
+y-r
+y-s
 y-u
 y-w
 y-x
@@ -3223,6 +3263,7 @@ yummy
 z-b
 z-c
 z-d
+z-f
 z-l
 z-q
 z-r

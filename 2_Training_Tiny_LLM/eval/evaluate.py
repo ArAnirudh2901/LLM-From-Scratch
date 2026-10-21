@@ -76,6 +76,18 @@ def eval_authored(read):
     return {f'authored_{k}_acc': a / max(1, b) for k, (a, b) in score.items()} | {'authored_n': {k: b for k, (_, b) in score.items()}}
 
 
+def eval_items(read, items, key):
+    """Accuracy and per-kind counts on a gold-verified item list (fresh_set, gender_set)."""
+    by = {}
+    for it in items:
+        ok = answer(it['text'], read)['option'] == it['expect']
+        a = by.setdefault(it['kind'], [0, 0])
+        a[0] += ok
+        a[1] += 1
+    n = sum(a for a, _ in by.values())
+    return {f'{key}_acc': round(n / len(items), 4), f'{key}_by_kind': {k: f'{a}/{b}' for k, (a, b) in sorted(by.items())}}
+
+
 def eval_clutrr(read, path='data/clutrr_facts/test.jsonl.gz', n=None):
     rows = [json.loads(l) for l in gzip.open(path, 'rt')][:n]
     preds = read([r['tokens'] for r in rows])
@@ -144,7 +156,7 @@ def eval_generated(model, vocab, device, n=1000, seed=4242):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--ckpt', default='runs/reader-v9/best.pt')
-    ap.add_argument('--sets', default='exam,authored,deep,clutrr,riddle,generated')
+    ap.add_argument('--sets', default='exam,authored,fresh,gender,deep,clutrr,riddle,generated')
     ap.add_argument('--out', default=None, help='write the results as JSON here')
     ap.add_argument('--beam', type=int, default=4, help='readings tried per exam question (best first)')
     a = ap.parse_args()
@@ -154,7 +166,10 @@ def main():
     beam = lambda batch: generate(model, vocab, batch, device, k=a.beam)   # several readings, the engine picks
     res = {}
     for s in a.sets.split(','):
-        res.update({'exam': lambda: eval_exam(beam), 'authored': lambda: eval_authored(beam), 'clutrr': lambda: eval_clutrr(read), 'riddle': lambda: eval_riddle(beam),
+        from eval.fresh_set import F as FRESH
+        from eval.gender_set import G as GENDER
+        res.update({'exam': lambda: eval_exam(beam), 'authored': lambda: eval_authored(beam),
+                    'fresh': lambda: eval_items(beam, FRESH, 'fresh'), 'gender': lambda: eval_items(beam, GENDER, 'gender'), 'clutrr': lambda: eval_clutrr(read), 'riddle': lambda: eval_riddle(beam),
                     'generated': lambda: eval_generated(model, vocab, device), 'deep': lambda: eval_deep(model, vocab, device)}[s]())
         print(json.dumps({k: v for k, v in res.items() if not k.endswith('misses')}, indent=1), flush=True)
     if a.out:

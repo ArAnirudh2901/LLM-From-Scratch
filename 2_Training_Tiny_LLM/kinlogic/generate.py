@@ -372,6 +372,14 @@ def pick_pair(rng, fam: Family, lo=1, hi=6):
     return None
 
 
+PRONOUN_HINTS = ['{X} told {his} teacher about the family trip.', '{X} lost {his} keys at the market yesterday.',
+                 '{X} says that {his} favourite subject is mathematics.', 'When {X} got the job, {he} called home first.',
+                 '{X} wore {his} new watch to the wedding.', '{X} walks {his} dog every morning.',
+                 '{X} keeps {his} old letters in a box.', 'Last year {X} finished {his} studies at college.']
+SPOUSE_HINTS = ['{X} {w} cooks for the whole family.', '{X} {w} works at a bank.', '{X} {w} is a doctor.',
+                '{X} {w} planted a mango tree in the garden.']
+
+
 def gender_hint(q: Q, r: Ref):
     """A sentence giving someone's gender outright."""
     rng = q.rng
@@ -379,8 +387,16 @@ def gender_hint(q: Q, r: Ref):
     words = {'M': ['male', 'a male', 'a man', 'a male member'], 'F': ['female', 'a female', 'a woman', 'a lady', 'a female member']}[r.g]
     if young:
         words += ['a boy'] if r.g == 'M' else ['a girl']
-    word = rng.choice(words)
-    q.add(f'{q.say(r)} is {word}.', [G(r, r.g)])
+    pick = rng.random()
+    his = {'M': 'his', 'F': 'her'}[r.g]
+    sp = q.fam.w.spouse(r.node) if r.node is not None and r.kind in ('name', 'letter') else -1
+    if r.kind in ('name', 'letter') and pick < 0.35:   # gender from a pronoun in an everyday sentence
+        q.add(rng.choice(PRONOUN_HINTS).format(X=r.surface, his=his, he={'M': 'he', 'F': 'she'}[r.g]), [], evidence=[r])
+    elif sp is not None and sp >= 0 and pick < 0.5:   # from a spouse word: "Jordan's wife cooks for the family"
+        w = 'wife' if r.g == 'M' else 'husband'
+        q.add(rng.choice(SPOUSE_HINTS).format(X=poss(r.surface), w=w), [F(r, w, q.anon(sp))])
+    else:
+        q.add(f'{q.say(r)} is {rng.choice(words)}.', [G(r, r.g)])
     q.gendered.add(r)
 
 
@@ -445,6 +461,8 @@ def q_statements(rng) -> dict | None:
     hide = rng.random() < 0.08
     clauses, cur = [], a
     hindi_ok = rng.random() < 0.06
+    use_prose = not hindi_ok and rng.random() < 0.35   # apposition, "whose", pronouns, lists (kinlogic/prose.py)
+    chain = []
     for k, run in enumerate(runs):
         end = run[-1][1]
         x, y, word, side = fact_for(q, run, cur, end, neutral=hide and rng.random() < 0.5)
@@ -455,6 +473,8 @@ def q_statements(rng) -> dict | None:
         if hindi_ok and hw:
             facts = _hindi_facts(q, rx, ry, hw, fam.hops(x, y))
             clauses.append((rng.choice([f'{ry.surface} is {poss(rx.surface)} {hw}', f'{ry.surface} is the {hw} of {rx.surface}']), facts))
+        elif use_prose:
+            chain.append(F(rx, word, ry, side))
         else:
             sym = _sym(rng, q, rx, ry, word) if rng.random() < 0.15 else None
             clauses.append(sym or (state(rng, rx.surface, ry.surface, word, side), [F(rx, word, ry, side)]))
@@ -504,7 +524,15 @@ def q_statements(rng) -> dict | None:
         ra, rb = rb, ra
     target = rb
     style = rng.random()
-    if style < 0.3 and len(clauses) <= 4:   # "If A is ...; B is ... and C is ..., how is D related to A?"
+    if use_prose:   # the chain in order (pronouns refer back), then the other sentences
+        from .prose import add_all
+        add_all(q, rng, chain, joint=lambda p1, p2, c: _joint(fam, p1, p2, c))
+        for c, fs in clauses:
+            q.add(cap(c) + '.', fs)
+        if not implied(q, target) and rng.random() < 0.6:
+            gender_hint(q, target)
+        q.add(ask_text(rng, ra.surface, rb.surface), [{'t': 'ask', 'x': ra, 'y': rb}])
+    elif style < 0.3 and len(clauses) <= 4:   # "If A is ...; B is ... and C is ..., how is D related to A?"
         parts = [c for c, _ in clauses]
         joined = '; '.join(parts[:-1]) + (' and ' if len(parts) > 1 else '') + parts[-1] if len(parts) > 1 else parts[0]
         facts = [f for _, fs in clauses for f in fs]
@@ -518,6 +546,12 @@ def q_statements(rng) -> dict | None:
         q.add(ask_text(rng, ra.surface, rb.surface), [{'t': 'ask', 'x': ra, 'y': rb}])
     t = fam.truth(ra.node, rb.node)
     return q.finish('statements', options_for(rng, t['label']) if rng.random() < 0.35 else None, {'truth': t['key']})
+
+
+def _joint(fam, p1, p2, c):
+    """c is the child of both p1 and p2 in the true family."""
+    w = fam.w
+    return None not in (p1.node, p2.node, c.node) and {w.father(c.node), w.mother(c.node)} == {p1.node, p2.node}
 
 
 def _relative_clauses(rng, clauses):
@@ -918,6 +952,8 @@ def _num(rng, n):
 
 
 def _listing(rng, names):
+    if len(names) == 2:   # never "Jeff, and Liam"
+        return f'{names[0]} and {names[1]}'
     return ', '.join(names[:-1]) + rng.choice([' and ', ', and ']) + names[-1] if len(names) > 1 else names[0]
 
 

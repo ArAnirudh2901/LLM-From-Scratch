@@ -42,13 +42,35 @@ granddaughter uncle aunt auntie brother sister son daughter husband wife cousin 
 AMBIGUOUS_NAMES = set('''will mark bill rose grace hope faith joy may june april august summer dawn eve iris ivy lily
 daisy ruby pearl amber jade sky rain sunny hunter carter mason cooper baker taylor parker gray grey brown white king
 prince rich frank earnest victor sage river willow autumn star crystal'''.split())
+# Frequent words on exam pages and in plain English that are never people here (capitalised at a sentence start, in a
+# heading or a solution); names that are also words (Rose, Will) are handled by AMBIGUOUS_NAMES.
+COMMON = set('''about above according additional after again against age ages all also although always among amount
+answer answers any anyone anything apart approach area arrangement ask asked asks based basic because before begin
+below best better between blood both bank banks brief but by can cannot case cases certain chapter check choice choices
+choose clearly code coded codes coding complete concept concepts conclusion conclusions condition conditions consider
+content contents context correct correctly could data decide decoded definitely description detail detailed details
+diagram difficult difficulty directions doctor does done download each easy either else engineer english enough
+evaluate even every exactly exam example examples exams except explanation explained expression expressions facts
+false family figure final finally find first five following for four from further general given gives giving going
+good great group hard hence here how however important information instruction instructions into its just keep key
+know known last lawyer least lecturer less let level like likely look main make manager many marks may maybe medium
+member members method might more most much must next nine none nor north note now number numbers objective often once
+one only option options order other others our out over page paper part pattern people per person please point
+possible practice prelims previous problem problems professor question questions quiz quick read reasoning refer
+related relation relations relationship relationships remaining result right rule rules said same scientist section
+see seven several shall should show shown since six so solution solutions solve solved some source south statement
+statements step steps still study such suppose sure table teacher ten test tests than that their them then there
+therefore these they thing things think third this those three through thus time title today total tree tricks true
+try two type types under understand upon use used using various very view west what when where whether which while
+who whom why with within without would write wrong yes yet you your'''.split())
 NAME_NEXT = {'is', 'was', "'s", 'has', 'had', 'and', ',', 'said', 'says', 'told', 'tells', 'introduced', 'introduces'}
 # After a sentence-initial "Will", "May", "Hope"... these keep it an ordinary word ("Will you...").
 NOT_A_NAME_NEXT = {'you', 'we', 'they', 'i', 'he', 'she', 'it', 'not', 'be', 'the', 'a', 'an', 'this', 'that', 'there'}
 # After a single capital "A" these make it a person ("A is ..."); any other lowercase word makes it the article.
 I_PRONOUN_NEXT = {'am', "'m", 'have', 'had', 'was', 'will', 'would', 'shall', 'can', 'could', 'do', 'did', 'said',
                   'told', 'asked', 'think', 'know', 'met', 'saw', 'went', 'went', 'live', 'love', 'pointed'}
-LETTER_NEXT = NAME_NEXT | {'related', 'in', 'on', 'at', 'to', 'from', 'with', 'or', '?', '.', ':', ';', 'x', 'are', 'were', 'married', 'who', 'whose', 'being', 'points', 'pointed', 'pointing',
+LETTER_NEXT = NAME_NEXT | {'related', 'in', 'on', 'at', 'to', 'from', 'with', 'or', '?', '.', ':', ';', 'x', 'are',
+               'wore', 'walks', 'lost', 'keeps', 'got', 'finished', 'called', 'lives', 'loves', 'went', 'works', 'were', 'married', 'who', 'whose', 'being', 'points', 'pointed', 'pointing',
                            'looks', 'looked', 'showed', 'shows', 'went', 'goes', 'loves', 'got', 'gets'}
 HEADS = {'man', 'woman', 'boy', 'girl', 'lady', 'gentleman', 'person', 'guy'}
 COPULA = {'is', 'was', 'are', 'were', 'be', 'been', 'being', 'become', 'becomes', 'became'}
@@ -188,7 +210,7 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
                 kind = 'letter'
         elif low in extra:
             kind = 'name'
-        elif re.fullmatch(r'[A-Za-z][\w-]*', t) and len(t) > 1:
+        elif re.fullmatch(r'[A-Za-z][A-Za-z-]*', t) and len(t) > 1 and low not in COMMON and not (t.isupper() and len(t) <= 6 and low not in extra):
             if t[0].isupper():
                 if i in starts:
                     if low not in LEXICON and low not in KIN_TITLES:

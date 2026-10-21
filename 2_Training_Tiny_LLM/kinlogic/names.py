@@ -1,4 +1,6 @@
-"""Name pools for generated questions: Indian (the exams' usual names) and international, by gender."""
+"""Name pools for generated questions: Indian (the exams' usual names) and international, by gender; and the
+gender a first name gives (name_model.py when trained, else these lists)."""
+import os
 
 INDIAN_M = '''Aarav Abhay Abhishek Aditya Ajay Akash Akhil Alok Aman Amar Amit Anand Anil Ankit Ankur Anuj Anupam Arjun
 Arun Ashok Ashwin Atul Ayush Balaji Bharat Bhaskar Chandan Chetan Darshan Deepak Dev Dhruv Dilip Dinesh Gaurav Girish
@@ -83,6 +85,46 @@ INDIAN_F = [n for n in dict.fromkeys(INDIAN_F + MORE_F) if n.lower() not in UNIS
 NAME_GENDER = {**{x.lower(): 'M' for x in INDIAN_M + WORLD_M}, **{x.lower(): 'F' for x in INDIAN_F + WORLD_F}}
 
 
+MODEL_PATH = os.environ.get('KIN_NAME_MODEL', os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                          'runs', 'names-v1', 'name_model.pt'))
+_MODEL = None
+
+
+def _name_model():
+    """(model, t_male, t_female) from name_model.py's checkpoint, or None (then the lists above are used)."""
+    global _MODEL
+    if _MODEL is None:
+        _MODEL = False
+        try:
+            if os.path.exists(MODEL_PATH):
+                import torch
+                from name_model import NameModel
+                ck = torch.load(MODEL_PATH, map_location='cpu', weights_only=False)
+                m = NameModel(**ck['config'])
+                m.load_state_dict(ck['model'])
+                _MODEL = (m.eval(), ck['t_male'], ck['t_female'])
+        except ImportError:
+            pass
+    return _MODEL or None
+
+
+def name_gender(names: list[str]) -> list[str | None]:
+    """'M', 'F' or None (open) per first name: the name model when trained, else the lists; unisex names stay open."""
+    nm = _name_model()
+    out = [None] * len(names)
+    todo = [i for i, n in enumerate(names) if n.lower() not in UNISEX]
+    if nm:
+        from name_model import decide, predict
+        model, tm, tf = nm
+        for i, p in zip(todo, predict(model, [names[i].lower() for i in todo], 'cpu')):
+            out[i] = decide(p, tm, tf)
+    else:
+        for i in todo:
+            out[i] = NAME_GENDER.get(names[i].lower())
+    return out
+
+
 def name_priors(ents: list[dict]) -> dict:
-    """{placeholder: gender} for names in prepare()'s table that the list knows."""
-    return {e['id']: NAME_GENDER[e['text'].lower()] for e in ents if e['kind'] == 'name' and e['text'].lower() in NAME_GENDER}
+    """{placeholder: gender} for the names in prepare()'s table whose gender the name model (or list) is sure of."""
+    ns = [e for e in ents if e['kind'] == 'name']
+    return {e['id']: g for e, g in zip(ns, name_gender([e['text'] for e in ns])) if g}

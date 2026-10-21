@@ -23,3 +23,16 @@ def test_thresholds_respect_the_wrong_budget():
     tm, tf = pick_thresholds(ps, gold, 0.0)
     dec = [decide(p, tm, tf) for p in ps]
     assert not any(d is not None and d != g for d, g in zip(dec, gold)) and dec[:2] == ['M', 'M'] and dec[4:6] == ['F', 'F']
+
+
+def test_name_priors_use_the_model_when_present(tmp_path, monkeypatch):
+    import kinlogic.names as kn
+    m = NameModel()
+    torch.save({'model': m.state_dict(), 'config': m.cfg, 't_male': 0.0, 't_female': 1.0}, tmp_path / 'nm.pt')
+    monkeypatch.setattr(kn, 'MODEL_PATH', str(tmp_path / 'nm.pt'))
+    monkeypatch.setattr(kn, '_MODEL', None)
+    ents = [{'id': '@0', 'text': 'Rahul', 'kind': 'name'}, {'id': '@1', 'text': 'Kiran', 'kind': 'name'}]
+    assert kn.name_priors(ents) == {}   # thresholds 0/1: an untrained model decides nothing; Kiran is unisex anyway
+    monkeypatch.setattr(kn, 'MODEL_PATH', str(tmp_path / 'missing.pt'))
+    monkeypatch.setattr(kn, '_MODEL', None)
+    assert kn.name_priors(ents) == {'@0': 'M'}   # no model: the lists

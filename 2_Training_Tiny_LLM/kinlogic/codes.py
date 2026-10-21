@@ -143,6 +143,24 @@ def read(tokens) -> str | None:
         if x not in people or y not in people:
             return None
     genders = [f"{m.group(1)} {'female' if m.group(2) in FEMALE else 'male'}" for m in GENDER.finditer(text)]
+    last = None   # the one person of the previous clause, for "when P got the job, he called home"
+    for sent in re.split(r' [.;,] ', text):   # "P lost his keys" / "P 's wife is a doctor" (a clause: no definitions, one person)
+        ps = set(re.findall(r'@\d+', sent))
+        if re.search(VERB, sent) or any(op in sent.split() for op in defs) or len(ps) > 1:
+            last = None
+            continue
+        if not ps:
+            if last is None:
+                continue
+            ps = {last}
+        p = ps.pop()
+        last = p
+        sp = re.search(rf"{p} 's (wife|husband)\b", sent)
+        pro = set(re.findall(r'\b(he|his|him|she|her)\b', sent))
+        g = ('male' if sp.group(1) == 'wife' else 'female') if sp else \
+            ('male' if pro <= {'he', 'his', 'him'} else 'female' if pro <= {'she', 'her'} else None) if pro else None
+        if g and f'{p} {g}' not in genders:
+            genders.append(f'{p} {g}')
     return ' ; '.join(facts_of(runs[0], defs) + extra + genders + [f'ask {x} {y}'])
 
 
