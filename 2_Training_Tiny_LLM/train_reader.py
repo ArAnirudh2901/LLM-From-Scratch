@@ -211,7 +211,13 @@ def main():
     ap.add_argument('--out', default='runs/reader-v9')
     ap.add_argument('--init', default='runs/clutrr-qa-v8/best.pt', help="v8 checkpoint to start from ('' for scratch)")
     ap.add_argument('--resume', action='store_true')
-    ap.add_argument('--steps', type=int, default=30000)
+    ap.add_argument('--steps', type=int, default=100000, help='budget; the wsd schedule usually stops earlier')
+    ap.add_argument('--schedule', default='wsd', choices=['wsd', 'cosine'],
+                    help='wsd: warmup, constant rate while held-out scores improve, then a linear decay and stop')
+    ap.add_argument('--patience', type=int, default=3, help='evaluations without improvement before the decay starts')
+    ap.add_argument('--min_delta', type=float, default=0.002)
+    ap.add_argument('--cooldown', type=float, default=0.15, help='decay length as a share of the steps so far (min 2000)')
+    ap.add_argument('--run', default=None, help='name of this run (stored in its checkpoints and the runs index)')
     ap.add_argument('--batch', type=int, default=64)
     ap.add_argument('--lr', type=float, default=4e-4)
     ap.add_argument('--warmup', type=int, default=500)
@@ -294,18 +300,35 @@ def main():
     loader = DataLoader(data, batch_size=a.batch, num_workers=a.workers, collate_fn=as_list, persistent_workers=a.workers > 0)
     it = iter(loader)
 
+    sched = (ck or {}).get('sched') or {'decay_start': None, 'decay_len': None, 'flat': 0}
+
     def lr_at(s):
         if s < a.warmup:
             return a.lr * s / a.warmup
-        t = min(1.0, (s - a.warmup) / max(1, a.steps - a.warmup))
-        return a.lr * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * t)))
+        if a.schedule == 'cosine':
+            t = min(1.0, (s - a.warmup) / max(1, a.steps - a.warmup))
+            return a.lr * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * t)))
+        if sched['decay_start'] is None:   # stable phase
+            return a.lr
+        t = min(1.0, (s - sched['decay_start']) / sched['decay_len'])
+        return a.lr * (1 - 0.9 * t)
+
+    import subprocess
+    meta = {'run': a.run or os.path.basename(a.out.rstrip('/')), 'args': vars(a), 'started': time.strftime('%Y-%m-%d %H:%M'),
+            'git': subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip(),
+            'data': None}
+    if a.pool and os.path.exists(f'{a.pool}/manifest.json'):
+        import hashlib
+        raw = open(f'{a.pool}/manifest.json', 'rb').read()
+        meta['data'] = {'total': json.loads(raw)['total'], 'manifest_sha256': hashlib.sha256(raw).hexdigest()}
 
     def save(path, extra=None, resumable=True):
         """'model' holds the weights to use (averaged when EMA is on); a resumable checkpoint also keeps the raw
         weights and the optimizer."""
         tmp = path + '.tmp'
         ck_ = {'model': (ema or model).state_dict(), 'config': cfg, 'vocab': vocab.itos, 'step': step, 'best': best,
-               'format': 'reader-v10' if cfg.get('arch') == 'v10' else 'reader-v9', **(extra or {})}
+               'format': 'reader-v10' if cfg.get('arch') == 'v10' else 'reader-v9', 'meta': meta, 'sched': sched,
+               **(extra or {})}
         if resumable:
             ck_.update({'raw': model.state_dict() if ema else None, 'opt': opt.state_dict(), 'scaler': scaler.state_dict()})
         torch.save(ck_, tmp)
@@ -354,12 +377,26 @@ def main():
                 score += 0.2 * rd['answer']
                 line += f" | deep dev answer {rd['answer']:.3f} by depth {by_depth(rows, preds)}"
             print(line + f" | by kind {r['kinds']}", flush=True)
+            if score > best + a.min_delta:
+                sched['flat'] = 0
+            else:
+                sched['flat'] += 1
             if score > best:
                 best = score
-                save(best_path, {'eval': r}, resumable=False)
+                save(best_path, {'eval': r, 'score': score}, resumable=False)
                 print(f'  new best {best:.4f}', flush=True)
+            if a.schedule == 'wsd' and sched['decay_start'] is None and (sched['flat'] >= a.patience or step >= 0.9 * a.steps):
+                sched['decay_start'], sched['decay_len'] = step, max(2000, int(a.cooldown * step))
+                print(f"  held-out scores flat for {sched['flat']} evaluations: decaying the rate over "
+                      f"{sched['decay_len']} steps, then stopping", flush=True)
             save(latest)
+            if sched['decay_start'] is not None and step >= sched['decay_start'] + sched['decay_len']:
+                break
     print(f'done: {step} steps, best {best:.4f}', flush=True)
+    index = os.path.join(os.path.dirname(a.out.rstrip('/')), 'index.jsonl')
+    with open(index, 'a') as f:   # one line per finished run, so versions stay told apart
+        f.write(json.dumps({**{k: v for k, v in meta.items() if k != 'args'}, 'out': a.out, 'steps': step, 'best': best,
+                            'arch': cfg.get('arch', 'gpt'), 'finished': time.strftime('%Y-%m-%d %H:%M')}) + '\n')
 
 
 if __name__ == '__main__':
