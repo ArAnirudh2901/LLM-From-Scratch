@@ -106,6 +106,8 @@ def load_pool(root):
             pool['deep'].setdefault(r['depth'], []).append(small(r))
     for r in load_jsonl(f'{root}/test/deep.jsonl.gz') if os.path.exists(f'{root}/test/deep.jsonl.gz') else []:
         pool['dev' if zlib.crc32(r['text'].encode()) % 2 == 0 else 'test'].append(keep(r))
+    for k in ('dev', 'test'):   # mixed formats and depths in any prefix (the file is ordered by format, then depth)
+        random.Random(0).shuffle(pool[k])
     import gc
     gc.collect()
     gc.freeze()   # millions of long-lived objects: keep full collections from rescanning them (and from copying
@@ -253,6 +255,7 @@ def main():
     latest, best_path = os.path.join(a.out, 'latest.pt'), os.path.join(a.out, 'best.pt')
 
     ck = torch.load(latest, map_location='cpu', weights_only=False) if a.resume and os.path.exists(latest) else None
+    sched = (ck or {}).get('sched') or {'decay_start': None, 'decay_len': None, 'flat': 0}
     vocab = Vocab(ck['vocab']) if ck else build_vocab()
     cfg = ck['config'] if ck else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': a.n_layer, 'n_head': 6,
                                    'n_embd': 384, 'dropout': a.dropout, **({'arch': 'v10'} if a.arch == 'v10' else {})}
@@ -294,6 +297,12 @@ def main():
         pool['reworded'], pool['p_reworded'] = load_jsonl(a.reworded), a.p_reworded
         print(f"reworded: {len(pool['reworded'])} verified rewrites at {a.p_reworded:.0%}", flush=True)
     if pool:
+        import hashlib
+        sig = hashlib.sha1(''.join(r['lf'] for r in pool['dev'][:600]).encode()).hexdigest()[:12]
+        if sched.get('dev_sig') not in (None, sig):   # scores on another dev set are not comparable
+            print(f"deep dev set changed ({sched['dev_sig']} -> {sig}): best score and patience reset", flush=True)
+            best, sched['flat'] = -1.0, 0
+        sched['dev_sig'] = sig
         print(f"pool: {sum(map(len, pool['kinds'].values()))} kind questions, {sum(map(len, pool['deep'].values()))} deep, "
               f"deep dev {len(pool['dev'])} / test {len(pool['test'])}", flush=True)
         data = PoolStream(vocab, a.block, a.seed + step, pool, clutrr, a.p_clutrr, authored, a.p_authored, a.unk_p,
@@ -303,7 +312,6 @@ def main():
     loader = DataLoader(data, batch_size=a.batch, num_workers=a.workers, collate_fn=as_list, persistent_workers=a.workers > 0)
     it = iter(loader)
 
-    sched = (ck or {}).get('sched') or {'decay_start': None, 'decay_len': None, 'flat': 0}
 
     def lr_at(s):
         if s < a.warmup:

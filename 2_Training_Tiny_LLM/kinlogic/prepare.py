@@ -48,7 +48,7 @@ NOT_A_NAME_NEXT = {'you', 'we', 'they', 'i', 'he', 'she', 'it', 'not', 'be', 'th
 # After a single capital "A" these make it a person ("A is ..."); any other lowercase word makes it the article.
 I_PRONOUN_NEXT = {'am', "'m", 'have', 'had', 'was', 'will', 'would', 'shall', 'can', 'could', 'do', 'did', 'said',
                   'told', 'asked', 'think', 'know', 'met', 'saw', 'went', 'went', 'live', 'love', 'pointed'}
-LETTER_NEXT = NAME_NEXT | {'related', 'are', 'were', 'married', 'who', 'whose', 'being', 'points', 'pointed', 'pointing',
+LETTER_NEXT = NAME_NEXT | {'related', 'in', 'on', 'at', 'to', 'from', 'with', 'or', '?', '.', ':', ';', 'x', 'are', 'were', 'married', 'who', 'whose', 'being', 'points', 'pointed', 'pointing',
                            'looks', 'looked', 'showed', 'shows', 'went', 'goes', 'loves', 'got', 'gets'}
 HEADS = {'man', 'woman', 'boy', 'girl', 'lady', 'gentleman', 'person', 'guy'}
 COPULA = {'is', 'was', 'are', 'were', 'be', 'been', 'being', 'become', 'becomes', 'became'}

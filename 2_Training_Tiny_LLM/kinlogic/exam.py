@@ -149,6 +149,8 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
     per token). Every reading is solved; readings that fail (contradiction, no question) drop out; the rest vote for
     their option, weighted by the reader's confidence. confidence: the winning option's share of the votes."""
     import math
+    from .codes import with_codes
+    read = with_codes(read)   # coded questions are read exactly; the model reads the rest
     p = prepare(text)
     got = read([p['tokens']])[0]
     readings = [(got, 0.0)] if isinstance(got, str) else [(g, 0.0) if isinstance(g, str) else (g[0], g[1]) for g in got]
@@ -344,7 +346,7 @@ def _which_expression(p, stmts, read, priors):
              for _, o in p['options']]
     preps = [prepare(t) for t in texts]
     lfs = [g if isinstance(g, str) else (g[0][0] if isinstance(g[0], tuple) else g[0]) for g in read([pp['tokens'] for pp in preps])]
-    ok = []
+    ok, options_ = [], p['options']
     for (lab, o), pp, lf in zip(p['options'], preps, lfs):
         by = {e['text']: e['id'] for e in pp['ents']}
         x, y = by.get(names.get(c['x'])), by.get(names.get(c['y']))
@@ -354,5 +356,6 @@ def _which_expression(p, stmts, read, priors):
         r = solve(st, people=[e['id'] for e in pp['ents']])
         if r['worlds'] and all(claim_holds(w, [{**c, 'x': x, 'y': y, 'claim': 1}], r['ids']) is True for w in r['worlds']):
             ok.append(lab)
-    return {'answer': ', '.join(ok) or 'none', 'option': ok[0] if len(ok) == 1 else None, 'status': 'expression',
+    return {'answer': ', '.join(ok) or 'none', 'option': ok[0] if len(ok) == 1 else (_labelled(options_, NONE) if not ok else None),
+            'status': 'expression',
             'explanation': f"[CHECKED]: options {', '.join(ok) or 'none'} make {names.get(c['y'])} the {c['r']} of {names.get(c['x'])}"}
