@@ -68,7 +68,16 @@ Vasudha Vidya Vimala Vinita Yamini Zara Zoya Afreen Ameena Bushra Farzana Hina M
 Shabana Shahnaz Tabassum Yasmin Gurleen Harleen Manjeet Navneet Simranjeet Ananya Debjani Ishani Moumita Paromita
 Rituparna Sohini Sudeshna Tanushree Mary Teresa Annamma Lissy Ammini Kamakshi Meenal Selvi Kalyani Bhavani Janani
 Sowmya Revathi Shanthi Vijaya Kokila Malathi Sukanya Hemavathi Lalitha Saraswati Tanu Pinky Chiku Minnie Guddi'''.split()
-UNISEX = {'kiran', 'harsha', 'shashi', 'sunny', 'jyoti', 'santoshi', 'rinku', 'bablu', 'pappu', 'guddu'}   # never given a gender by name
+MORE_M += '''Salim Saleem Mohammed Mohammad Muhammad Mohd Ahmad Ali Hassan Hasan Hussain Husain Rashid Rahim Karim Faisal Zaid
+Omar Umar Usman Bilal Hamza Tariq Nadeem Naveed Waseem Wasim Sohail Shoaib Asif Arif Aamir Salman Shahid Shakeel Junaid
+Javed Jawed Riyaz Zaheer Mustafa Yasin Ibrahim Ismail Idris Anwar Akram Aslam Iqbal Jamal Kamal Khalid Majid Mansoor Nasir
+Rafiq Rehan Sajid Sharif Zubair Yousuf Abdul Abdullah Rizwan Irshad Ejaz Feroz Firoz Altaf Afzal Azhar'''.split()
+MORE_F += '''Zainab Lubna Shabnam Aisha Ayesha Khadija Mariam Maryam Nusrat Rubina Rukhsana Shazia Farida Hina Huma Iqra Mehreen
+Mehwish Nazia Parveen Rehana Rizwana Sabiha Sadia Saira Salma Samina Shirin Sumaiya Yasmeen Zeba Zehra Nargis Naseem_no
+Rabia Razia Sakina Shamim_no Tahira Zubeida Ruksar Asma Amina Fatimah Haseena Jameela Kausar Nafisa'''.split()
+MORE_F = [n for n in MORE_F if not n.endswith('_no')]
+UNISEX = {'kiran', 'harsha', 'shashi', 'sunny', 'jyoti', 'santoshi', 'rinku', 'bablu', 'pappu', 'guddu',   # never given a gender by name
+          'gurpreet', 'harpreet', 'manpreet', 'jaspreet', 'manjeet', 'navneet', 'simranjeet', 'noor', 'shaheen', 'naseem', 'shamim'}
 INDIAN_M = [n for n in dict.fromkeys(INDIAN_M + MORE_M) if n.lower() not in UNISEX]
 INDIAN_F = [n for n in dict.fromkeys(INDIAN_F + MORE_F) if n.lower() not in UNISEX and n not in INDIAN_M]
 NAME_GENDER = {**{x.lower(): 'M' for x in INDIAN_M + WORLD_M}, **{x.lower(): 'F' for x in INDIAN_F + WORLD_F}}
