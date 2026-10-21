@@ -84,7 +84,8 @@ class PoolStream(IterableDataset):
             else:
                 ex = rng.choice(self.pool['kinds'][rng.choices(kinds, weights)[0]])
             n += 1
-            enc = encode_example(self.vocab, ex['tokens'], ex['lf'], self.block, rng, self.unk_p)
+            tokens, lf = (ex[0].split(' '), ex[1]) if isinstance(ex, tuple) else (ex['tokens'], ex['lf'])
+            enc = encode_example(self.vocab, tokens, lf, self.block, rng, self.unk_p)
             if enc:
                 yield enc
 
@@ -94,12 +95,13 @@ def load_pool(root):
     import glob
     import zlib
     keep = lambda r: {'tokens': r['tokens'], 'lf': r['lf'], 'kind': r['kind'], 'depth': r.get('depth')}
+    small = lambda r: (' '.join(r['tokens']), r['lf'])   # training rows: two strings each (1.4M rows fit in RAM)
     pool = {'kinds': {}, 'deep': {}, 'dev': [], 'test': []}
     for f in sorted(glob.glob(f'{root}/kinds/*.jsonl.gz')):
-        pool['kinds'][os.path.basename(f).split('.')[0]] = [keep(r) for r in load_jsonl(f)]
+        pool['kinds'][os.path.basename(f).split('.')[0]] = [small(r) for r in load_jsonl(f)]
     for f in sorted(glob.glob(f'{root}/deep/*/d*.jsonl.gz')):
         for r in load_jsonl(f):
-            pool['deep'].setdefault(r['depth'], []).append(keep(r))
+            pool['deep'].setdefault(r['depth'], []).append(small(r))
     for r in load_jsonl(f'{root}/test/deep.jsonl.gz') if os.path.exists(f'{root}/test/deep.jsonl.gz') else []:
         pool['dev' if zlib.crc32(r['text'].encode()) % 2 == 0 else 'test'].append(keep(r))
     import gc

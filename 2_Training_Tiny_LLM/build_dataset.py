@@ -1,10 +1,11 @@
 """Builds the counted, verified question set: every question is built from a known family and re-solved by the
 engine before it counts (kinlogic/deep.py check); the run keeps going until every quota is full.
 
-    python build_dataset.py [--per 1000] [--test-per 50] [--per-kind 5000] [--workers 8]
+    python build_dataset.py [--per 6000] [--test-per 80] [--per-kind 100000] [--workers 8]
 
 data/dataset/deep/<format>/d<depth>.jsonl.gz   deep chains: 5 formats x depths 1-12, `per` each (training)
-data/dataset/test/deep.jsonl.gz                `test-per` per format and depth, never in training (other seeds)
+data/dataset/test/deep.jsonl.gz                `test-per` per format and depth (400 per depth by default), never in
+                                               training (text-disjoint)
 data/dataset/kinds/<kind>.jsonl.gz             every other generator kind, `per-kind` each
 data/dataset/manifest.json                     counts, rejects and how many were tried
 Resumable: existing files count toward the quotas.
@@ -96,9 +97,9 @@ def main():
     global OUT
     from kinlogic import deep, generate as gen
     ap = argparse.ArgumentParser()
-    ap.add_argument('--per', type=int, default=1000)
-    ap.add_argument('--test-per', type=int, default=50)
-    ap.add_argument('--per-kind', type=int, default=5000)
+    ap.add_argument('--per', type=int, default=6000)
+    ap.add_argument('--test-per', type=int, default=80)
+    ap.add_argument('--per-kind', type=int, default=100000)
     ap.add_argument('--workers', type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument('--depths', default='1-12')
     ap.add_argument('--root', default='data/dataset', help='where the dataset lives (e.g. on Google Drive, built once)')
@@ -150,7 +151,7 @@ def main():
                     buckets[b].append(r)
             done = sum(len(v) for v in buckets.values())
             print(f'round {rnd}: {done} questions, {len(open_)} buckets were open, {time.time() - t0:.0f}s', flush=True)
-            if rnd > 50:
+            if rnd > 200:
                 print('stopping: some buckets cannot be filled', [b for b in buckets if want(b) > 0][:10])
                 break
 
@@ -166,6 +167,9 @@ def main():
         'kinds': {k: len(buckets[('kind', k, None)]) for k in kinds},
         'total': sum(len(v) for v in buckets.values()), 'tried': stats['tried'], 'rejected': stats['rejected'],
         'seconds': round(time.time() - t0)}
+    import glob
+    manifest['sha256'] = {os.path.relpath(f, OUT): hashlib.sha256(open(f, 'rb').read()).hexdigest()
+                          for f in sorted(glob.glob(f'{OUT}/**/*.jsonl.gz', recursive=True))}
     json.dump(manifest, open(f'{OUT}/manifest.json', 'w'), indent=1)
     print(json.dumps({k: manifest[k] for k in ('total', 'tried', 'rejected', 'seconds')}))
 
@@ -174,5 +178,21 @@ def _call(fn, args):
     return fn(args)
 
 
+def verify(root):
+    """Every file matches the manifest's SHA-256 and the counts add up; exit 1 otherwise."""
+    import sys
+    m = json.load(open(f'{root}/manifest.json'))
+    bad = [f for f, h in m.get('sha256', {}).items()
+           if not os.path.exists(f'{root}/{f}') or hashlib.sha256(open(f'{root}/{f}', 'rb').read()).hexdigest() != h]
+    n = sum(sum(v.values()) for v in m['deep_train'].values()) + sum(sum(v.values()) for v in m['deep_test'].values()) + sum(m['kinds'].values())
+    print(f"{len(m.get('sha256', {}))} files, {n} questions (manifest total {m['total']}); mismatched files: {bad or 'none'}")
+    if bad or n != m['total'] or not m.get('sha256'):
+        sys.exit(1)
+
+
 if __name__ == '__main__':
-    main()
+    import sys
+    if '--verify' in sys.argv:
+        verify(sys.argv[sys.argv.index('--root') + 1] if '--root' in sys.argv else OUT)
+    else:
+        main()
