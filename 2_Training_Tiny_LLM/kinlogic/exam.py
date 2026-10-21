@@ -1,0 +1,275 @@
+"""Answers a whole exam question: text in, chosen option and worked solution out.
+
+    answer(text, read) -> {'answer', 'option', 'status', 'explanation', 'facts'}
+
+read(list of token lists) -> list of fact texts is the reader model (or any function standing in for it). Handles
+relation, who, how-many, gender and pair questions, statements to check ("which is definitely true"), data
+sufficiency, and coded "which expression shows..." questions (each option is read on its own).
+"""
+from __future__ import annotations
+
+import re
+
+from .engine import alternatives, claim_holds, pair_holds, solve
+from .explain import explain, match_option
+from .facts import parse
+from .kin import paths_of
+from .names import name_priors
+from .prepare import prepare
+
+CANT = re.compile(r"cannot be determined|can.?t be determined|data (?:is )?inadequate|insufficient|not possible to determine|"
+                  r"cannot be established|can.?t say", re.I)
+NONE = re.compile(r'none of (?:these|the above)', re.I)
+NUM_WORDS = {w: i for i, w in enumerate('zero one two three four five six seven eight nine ten eleven twelve'.split())}
+SYN = {'dad': 'father', 'mom': 'mother', 'mum': 'mother', 'grand father': 'grandfather', 'grand mother': 'grandmother',
+       'grand son': 'grandson', 'grand daughter': 'granddaughter', 'in law': 'in-law', 'cousin brother': 'cousin',
+       'cousin sister': 'cousin', 'great grand': 'great-grand', 'grand nephew': 'grand-nephew', 'grand niece': 'grand-niece'}
+
+
+# ---------- options ----------
+
+def option_moves(text: str):
+    """A relation option as steps: "Sister of father-in-law" / "wife's father's sister" -> [(move, gender)];
+    None when it is not a chain of relation words."""
+    t = ' ' + text.lower().strip(' .') + ' '
+    for a, b in SYN.items():
+        t = t.replace(f' {a} ', f' {b} ').replace(f' {a}-', f' {b}-').replace(f'{a} ', f'{b} ')
+    t = re.sub(r"\b(his|her|my|the|a|an|their)\b", ' ', t)
+    parts = [p.strip() for p in t.split(' of ') if p.strip()][::-1]   # "x of y" -> y then x
+    words = []
+    for part in parts:
+        for w in part.split("'s"):
+            w = w.strip()
+            if w:
+                words.append(w)
+    steps = []
+    for w in words:
+        toks = w.split()
+        side = toks[0] if toks and toks[0] in ('paternal', 'maternal') else None
+        word = '-'.join(toks[1:] if side else toks).replace('--', '-')
+        paths = paths_of(word, side)
+        if not paths:
+            return None
+        for st in paths[0]:
+            steps += [('U', None), ('D', st.g)] if st.m == 'B' else [(st.m, st.g)]
+    return steps or None
+
+
+def _same_path(moves, ans_moves) -> bool:
+    if len(moves) != len(ans_moves):
+        return False
+    return all(m == am and (g is None or g == ag) for (m, g), (am, ag) in zip(moves, ans_moves))
+
+
+def _relation_option(cands, options, status):
+    """First answer (in order of preference) that some option names, by word or by spelled-out path."""
+    for a in cands:
+        if a.get('key') in (None, 'none'):
+            continue
+        lab = match_option(a.get('label') or a['key'], options) or match_option(a.get('base') or a['key'], options)
+        if lab:
+            return a, lab
+        am = [(m, g) for m, g, _ in a.get('moves') or []]
+        for lab, text in options:
+            for alt in re.split(r'\s+or\s+|/', text):
+                mv = option_moves(alt)
+                if mv and _same_path(mv, am):
+                    return a, lab
+            alts = [option_moves(x) for x in re.split(r'\s+or\s+|/', text)]
+            if status == 'gender' and len(alts) > 1 and all(alts):   # "Grandson or granddaughter"
+                neutral = [(m, None) for m, _ in am]
+                if all(_same_path([(m, None) for m, _ in x], neutral) for x in alts):
+                    return a, lab
+    return None, None
+
+
+def _labelled(options, regex):
+    return next((lab for lab, t in options if regex.search(t)), None)
+
+
+def _names_in(text, ents):
+    """Placeholders an option names ("A and C", "P, Q")."""
+    byname = {e['text'].lower(): e['id'] for e in ents}
+    toks = re.findall(r"[A-Za-z][\w-]*", text)
+    found = [byname[t.lower()] for t in toks if t.lower() in byname]
+    return found
+
+
+def _number(text):
+    m = re.search(r'\d+', text)
+    if m:
+        return int(m.group(0))
+    for w, n in NUM_WORDS.items():
+        if re.search(rf'\b{w}\b', text.lower()):
+            return n
+    return None
+
+
+ROMAN = {'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5, 'vi': 6}
+
+
+def _roman_set(text):
+    t = text.lower()
+    if re.search(r'\ball\b', t):
+        return 'all'
+    if re.search(r'\bnone\b|\bneither\b', t):
+        return set()
+    return {ROMAN[r] for r in re.findall(r'\b(i{1,3}|iv|vi?)\b', t) if r in ROMAN} or {int(n) for n in re.findall(r'\b\d\b', t)}
+
+
+# ---------- the answer ----------
+
+def answer(text: str, read, priors: dict | None = None) -> dict:
+    """Never raises: a failure comes back as status 'error' with the reason."""
+    try:
+        return _answer(text, read, priors)
+    except Exception as e:   # one odd question must not stop a batch or the page
+        return {'answer': 'error', 'option': None, 'status': 'error', 'explanation': f'{type(e).__name__}: {e}', 'facts': ''}
+
+
+def _answer(text: str, read, priors: dict | None = None) -> dict:
+    p = prepare(text)
+    ents, options = p['ents'], p['options']
+    priors = {**name_priors(ents), **(priors or {})}
+    names = {e['id']: e['text'] for e in ents}
+    people = [e['id'] for e in ents]
+    lf = read([p['tokens']])[0]
+    stmts, _ = parse(lf)
+    out = {'facts': lf, 'options': options}
+    low = p['question'].lower()
+
+    if any(s.get('claim') for s in stmts) and 'expression' in low and options:
+        return {**out, **_which_expression(p, stmts, read, priors)}
+    if any(s.get('claim') for s in stmts):
+        return {**out, **_claims(stmts, options, low, people, priors)}
+    if any(s.get('part') for s in stmts):
+        return {**out, **_sufficiency(stmts, options, people, priors)}
+    r = solve(stmts, people=people, priors=priors)
+    if not r['questions']:
+        return {**out, 'answer': 'no question found', 'option': None, 'status': 'none', 'explanation': ''}
+    q = r['questions'][-1]
+    qi = len(r['questions']) - 1
+    t = q['q']['t']
+    if t == 'pair':
+        what = q['q']['what']
+        ok = []
+        for lab, o in options:
+            pair = _names_in(o, ents)
+            if len(pair) == 2 and r['worlds'] and all(pair_holds(w, what, r['ids'][pair[0]], r['ids'][pair[1]])
+                                                      for w in r['worlds'] if pair[0] in r['ids'] and pair[1] in r['ids']):
+                ok.append(lab)
+        return {**out, 'status': 'pair', 'explanation': f'[CHECKED]: pairs that are {what}: {", ".join(ok) or "none"}',
+                'answer': ', '.join(ok) or 'none', 'option': ok[0] if len(ok) == 1 else _labelled(options, NONE)}
+    ex = explain(stmts, r, qi, names=names, priors=priors, options=options) if q['answers'] else None
+    res = {'status': q['status'], 'explanation': ex['text'] if ex else 'The statements contradict each other.'}
+    if not q['answers']:
+        return {**out, **res, 'answer': 'contradiction', 'option': _labelled(options, CANT)}
+    if t == 'ask':
+        cands = list(q['answers'])
+        status = 'gender' if q['status'] == 'unique' and cands[0].get('moves') and not cands[0].get('gender') else q['status']
+        a, lab = _relation_option(cands, options, status) if options else (cands[0], None)
+        if options and not lab:
+            if status in ('gender', 'conditional', 'ambiguous') and _labelled(options, CANT):
+                return {**out, **res, 'answer': 'cannot be determined', 'option': _labelled(options, CANT)}
+            a, lab = _relation_option(alternatives(r, qi), options, status)
+            if lab:
+                res['explanation'] += f"\n[NOTE]: Read with {names.get(a['merged'][1], a['merged'][1])} as the person the text leaves unnamed."
+        a = a or cands[0]
+        label = a.get('label') or a['key']
+        text_ans = q.get('neutral') or label if q['status'] == 'gender' and a is cands[0] else label
+        return {**out, **res, 'answer': text_ans, 'option': lab or (_labelled(options, NONE) if options else None)}
+    if t == 'who':
+        want = q['answers'][0].get('names', [])
+        lab = next((l for l, o in options if want and sorted(_names_in(o, ents)) == sorted(want)), None)
+        return {**out, **res, 'answer': ', '.join(names.get(n, n) for n in want) or 'not named', 'option': lab or _labelled(options, NONE)}
+    if t == 'count':
+        vals = [a['key'] for a in q['answers']]
+        if len(vals) > 1 and _labelled(options, CANT):
+            return {**out, **res, 'answer': 'cannot be determined', 'option': _labelled(options, CANT)}
+        lab = next((l for l, o in options if str(_number(o)) == vals[0]), None)
+        return {**out, **res, 'answer': vals[0], 'option': lab}
+    if t == 'gender?':
+        g = q['answers'][0]['key']
+        lab = _labelled(options, re.compile(rf'^\s*{g}\b', re.I)) if g in ('male', 'female') else _labelled(options, CANT)
+        return {**out, **res, 'answer': g if g != 'unknown' else 'cannot be determined', 'option': lab}
+    return {**out, **res, 'answer': q['answers'][0]['key'], 'option': None}
+
+
+def _claims(stmts, options, low, people, priors):
+    r = solve(stmts, people=people, priors=priors)
+    verdicts = r['claims']
+    want = 'false' if re.search(r'\bfalse\b|not true|incorrect', low) else 'true'
+    hits = {k for k, v in verdicts.items() if v == want}
+    ans = f"{len(hits)} statement{'s' if len(hits) != 1 else ''} {want}: " + (', '.join(str(k) for k in sorted(hits)) or 'none')
+    lab = None
+    if 'how many' in low:
+        lab = next((l for l, o in options if _number(o) == len(hits)), None)
+    else:
+        for l, o in options:
+            s = _roman_set(o)
+            if s == 'all' and hits == set(verdicts) or s == hits:
+                lab = l
+                break
+    lines = [f'[CLAIM {k}]: {v}' for k, v in sorted(verdicts.items())]
+    return {'answer': ans, 'option': lab, 'status': 'claims', 'explanation': '\n'.join(lines)}
+
+
+def _sufficiency(stmts, options, people, priors):
+    parts = sorted({s['part'] for s in stmts if s.get('part')})
+
+    def enough(sub):
+        r = solve(stmts, parts=set(sub), people=people, priors=priors)
+        if not r['questions'] or not r['questions'][-1]['answers']:
+            return False
+        return r['questions'][-1]['status'] == 'unique'
+
+    alone = {k: enough([k]) for k in parts}
+    together = enough(parts)
+    lines = [f"[STATEMENT {k}]: {'sufficient alone' if v else 'not sufficient alone'}" for k, v in alone.items()]
+    lines.append(f"[TOGETHER]: {'sufficient' if together else 'not sufficient'}")
+    lab = None
+    if len(parts) == 2:
+        a, b = alone[parts[0]], alone[parts[1]]
+        verdict = 'either' if a and b else 'only1' if a else 'only2' if b else 'both' if together else 'neither'
+        pats = {'only1': r'(only|alone).*\bi\b(?!i)|\bi\b(?!i).*alone', 'only2': r'(only|alone).*\bii\b|\bii\b.*alone',
+                'either': r'either', 'both': r'both|together', 'neither': r'neither|not sufficient|even'}
+        lab = next((l for l, o in options if re.search(pats[verdict], o.lower())), None)
+    else:
+        for l, o in options:
+            nums = {int(n) for n in re.findall(r'\d', o)}
+            if re.search(r'not sufficient', o.lower()):
+                if not together:
+                    lab = l
+            elif re.search(r'\ball\b', o.lower()) and together and not any(enough(sorted(set(parts) - {k})) for k in parts):
+                lab = l
+            elif nums and set(nums) <= set(parts) and enough(sorted(nums)):
+                lab = lab or l
+    return {'answer': lines[-1].split(': ')[1], 'option': lab, 'status': 'sufficiency', 'explanation': '\n'.join(lines)}
+
+
+def _which_expression(p, stmts, read, priors):
+    """ "Which expression shows that M is the maternal uncle of T?": read each option with the code definitions."""
+    claim = [s for s in stmts if s.get('claim') and s['t'] == 'rel']
+    if not claim:
+        return {'answer': 'no claim found', 'option': None, 'status': 'none', 'explanation': ''}
+    c = claim[0]
+    names = {e['id']: e['text'] for e in p['ents']}
+    q = p['question']
+    cut = re.search(r'which (?:of the following|one)', q, re.I)
+    defs = q[:cut.start()] if cut else q
+    texts = [f"{defs} In the expression '{o}', how is {names.get(c['y'], c['y'])} related to {names.get(c['x'], c['x'])}?"
+             for _, o in p['options']]
+    preps = [prepare(t) for t in texts]
+    lfs = read([pp['tokens'] for pp in preps])
+    ok = []
+    for (lab, o), pp, lf in zip(p['options'], preps, lfs):
+        by = {e['text']: e['id'] for e in pp['ents']}
+        x, y = by.get(names.get(c['x'])), by.get(names.get(c['y']))
+        st, _ = parse(lf)
+        if x is None or y is None:
+            continue
+        r = solve(st, people=[e['id'] for e in pp['ents']])
+        if r['worlds'] and all(claim_holds(w, [{**c, 'x': x, 'y': y, 'claim': 1}], r['ids']) is True for w in r['worlds']):
+            ok.append(lab)
+    return {'answer': ', '.join(ok) or 'none', 'option': ok[0] if len(ok) == 1 else None, 'status': 'expression',
+            'explanation': f"[CHECKED]: options {', '.join(ok) or 'none'} make {names.get(c['y'])} the {c['r']} of {names.get(c['x'])}"}

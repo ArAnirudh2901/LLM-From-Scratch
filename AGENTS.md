@@ -40,6 +40,28 @@ Answers "how is B related to A?" about a short family story (CLUTRR-style). Name
 | `verify_model.py` | checks model files against `model_manifest.json` (exit 1 on any mismatch) |
 | `web/` | browser engine: `engine.c` (WASM via `build.sh`, needs emcc; six builds), `kinship.js`, `model/`, `test/test_node.mjs` |
 
+### v9: reader + exact engine (in progress, 2026-10-21)
+
+The model no longer guesses the relation. The **reader** (same 13M GPT, warm-started from v8) turns the whole question
+into family facts; the **engine** (`kinlogic/`, pure Python, exact) builds every family that fits them and answers.
+
+| File | Role |
+| --- | --- |
+| `kinlogic/facts.py` | the fact language (`@1 mother #1 ; #1 brother #2 ; #2 son @0 ; ask @1 @0`), parser, decoding grammar |
+| `kinlogic/kin.py` | relation words as moves; names every relation (paternal/maternal, great-*, in-laws, co-brother, Hindi) |
+| `kinlogic/engine.py` | the solver: conventions, "only"/no-sibling identities, negations, counts, closed-family puzzles, claims, name-gender priors, fallback readings |
+| `kinlogic/prepare.py` | question text -> tokens with placeholders (names, letters, "a man"); options split off; uses `kinlogic/data/lexicon.txt` |
+| `kinlogic/generate.py` | synthetic exam questions with exact facts (statements, nested, speech, identity, introduce, coded, puzzle, sufficiency, claims, story) |
+| `kinlogic/clutrr.py` | CLUTRR stories -> facts (`data/clutrr_facts/`) |
+| `kinlogic/exam.py`, `explain.py` | whole exam question -> option + worked solution |
+| `reader.py`, `train_reader.py` | vocab, encoding, cached constrained decoding; training (fp16 on CUDA, resume, eval) |
+| `eval/` | `exam_set.py` (hand-written, never trained on), `evaluate.py` (exam, CLUTRR test, RiddleBench, generated) |
+| `colab/train_reader_colab.ipynb` | free-T4 training: clones branch `v9-reader` of Kinthread-llm-model |
+
+Tests: `.venv/bin/python -m pytest 2_Training_Tiny_LLM/tests -q` (run from `2_Training_Tiny_LLM`). With gold facts the
+engine answers 66/66 exam questions (`python -m eval.run_exam gold`) and matches every consistent CLUTRR label
+(87% of CLUTRR test; the rest are CLUTRR labelling errors or ambiguous stories).
+
 Best checkpoints: QA `runs/clutrr-qa-v8/best.pt` (val 89.8%, test 44.8%, val with distractors 78.2%); tagger
 `runs/name-tagger-v4/tagger.pt`. Weak spots: long chains, friend/stranger detection, ambiguous places.
 Python with torch: `.venv/bin/python` in this repo (needs pandas + pyarrow for the parquet data).
@@ -65,3 +87,4 @@ Python with torch: `.venv/bin/python` in this repo (needs pandas + pyarrow for t
 - 2026-10-20: no model changes. Kinthread (website) now ships a neural-network-cone loader driven by an exact
   progress follower, resumable downloads, share links and contradiction checks; its `vendor/kinship/` equals
   `2_Training_Tiny_LLM/web` here (SHA-256 manifest).
+- 2026-10-21: v9 pipeline built (kinlogic engine, generator, reader training, eval, Colab notebook); not trained yet.
