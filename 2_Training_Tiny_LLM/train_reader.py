@@ -211,12 +211,12 @@ def main():
     ap.add_argument('--out', default='runs/reader-v9')
     ap.add_argument('--init', default='runs/clutrr-qa-v8/best.pt', help="v8 checkpoint to start from ('' for scratch)")
     ap.add_argument('--resume', action='store_true')
-    ap.add_argument('--steps', type=int, default=100000, help='budget; the wsd schedule usually stops earlier')
+    ap.add_argument('--steps', type=int, default=85000, help='budget (about 4 passes over the verified set, the most repetition still worth as much as new data: Muennighoff et al. 2023); the wsd schedule usually stops earlier')
     ap.add_argument('--schedule', default='wsd', choices=['wsd', 'cosine'],
                     help='wsd: warmup, constant rate while held-out scores improve, then a linear decay and stop')
     ap.add_argument('--patience', type=int, default=3, help='evaluations without improvement before the decay starts')
     ap.add_argument('--min_delta', type=float, default=0.002)
-    ap.add_argument('--cooldown', type=float, default=0.15, help='decay length as a share of the steps so far (min 2000)')
+    ap.add_argument('--cooldown', type=float, default=0.2, help='decay length as a share of the steps so far (min 2000; 20%% matches cosine, Hägele et al. 2024)')
     ap.add_argument('--run', default=None, help='name of this run (stored in its checkpoints and the runs index)')
     ap.add_argument('--batch', type=int, default=64)
     ap.add_argument('--lr', type=float, default=4e-4)
@@ -311,7 +311,7 @@ def main():
         if sched['decay_start'] is None:   # stable phase
             return a.lr
         t = min(1.0, (s - sched['decay_start']) / sched['decay_len'])
-        return a.lr * (1 - 0.9 * t)
+        return a.lr * (0.1 + 0.9 * (1 - math.sqrt(t)))   # 1-sqrt cooldown (Hägele et al. 2024)
 
     import subprocess
     meta = {'run': a.run or os.path.basename(a.out.rstrip('/')), 'args': vars(a), 'started': time.strftime('%Y-%m-%d %H:%M'),
