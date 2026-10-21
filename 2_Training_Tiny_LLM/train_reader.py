@@ -56,6 +56,8 @@ class PoolStream(IterableDataset):
     over the run), CLUTRR stories and the hand-written training split."""
 
     def __init__(self, vocab, block, seed, pool, clutrr, p_clutrr, authored, p_authored, unk_p, total, start, p_deep):
+        # total: examples over which the curriculum ramps (fixed, not the step budget: an early stop must still have
+        # trained every depth)
         self.vocab, self.block, self.seed, self.pool = vocab, block, seed, pool
         self.clutrr, self.pc, self.authored, self.pa, self.unk_p = clutrr, p_clutrr, authored, p_authored, unk_p
         self.total, self.start, self.p_deep = total, start, p_deep
@@ -229,9 +231,9 @@ def main():
     ap.add_argument('--unk_p', type=float, default=0.02)
     ap.add_argument('--block', type=int, default=320)
     ap.add_argument('--workers', type=int, default=2)
-    ap.add_argument('--eval_every', type=int, default=2000)
+    ap.add_argument('--eval_every', type=int, default=3000)
     ap.add_argument('--save_every', type=int, default=500)
-    ap.add_argument('--dev', type=int, default=1500)
+    ap.add_argument('--dev', type=int, default=1000)
     ap.add_argument('--amp', action='store_true', help='fp16 mixed precision on CUDA (weights stay fp32)')
     ap.add_argument('--compile', action='store_true')
     ap.add_argument('--seed', type=int, default=0)
@@ -240,7 +242,8 @@ def main():
     ap.add_argument('--n_layer', type=int, default=6)
     ap.add_argument('--ema', type=float, default=0.999, help='decay of the averaged weights used to evaluate and save (0: off)')
     ap.add_argument('--pool', default='data/dataset', help="verified questions from build_dataset.py ('' : generate on the fly)")
-    ap.add_argument('--p_deep', default='0.08,0.25', help='share of deep chains at the start and the end of the run')
+    ap.add_argument('--p_deep', default='0.08,0.25', help='share of deep chains at the start and after the ramp')
+    ap.add_argument('--ramp_steps', type=int, default=20000, help='steps by which every depth (up to 12) is in the mix')
     ap.add_argument('--reworded', default='data/reworded.jsonl.gz', help='frontier-model rewrites (kinlogic/reword.py), if present')
     ap.add_argument('--p_reworded', type=float, default=0.15)
     a = ap.parse_args()
@@ -283,7 +286,7 @@ def main():
 
     clutrr = load_jsonl('data/clutrr_facts/train.jsonl.gz') if os.path.exists('data/clutrr_facts/train.jsonl.gz') else []
     dev = dev_set(a.dev)
-    cval = load_jsonl('data/clutrr_facts/validation.jsonl.gz', 600) if os.path.exists('data/clutrr_facts/validation.jsonl.gz') else []
+    cval = load_jsonl('data/clutrr_facts/validation.jsonl.gz', 400) if os.path.exists('data/clutrr_facts/validation.jsonl.gz') else []
     from eval.authored_set import examples as authored_examples
     authored = authored_examples(('train',)) if a.p_authored > 0 else []
     pool = load_pool(a.pool) if a.pool and os.path.isdir(a.pool) else None
@@ -294,7 +297,7 @@ def main():
         print(f"pool: {sum(map(len, pool['kinds'].values()))} kind questions, {sum(map(len, pool['deep'].values()))} deep, "
               f"deep dev {len(pool['dev'])} / test {len(pool['test'])}", flush=True)
         data = PoolStream(vocab, a.block, a.seed + step, pool, clutrr, a.p_clutrr, authored, a.p_authored, a.unk_p,
-                          a.steps * a.batch, step * a.batch, tuple(map(float, a.p_deep.split(','))))
+                          min(a.steps, a.ramp_steps) * a.batch, step * a.batch, tuple(map(float, a.p_deep.split(','))))
     else:
         data = Stream(vocab, a.block, a.seed + step, clutrr, a.p_clutrr, a.unk_p, authored, a.p_authored)
     loader = DataLoader(data, batch_size=a.batch, num_workers=a.workers, collate_fn=as_list, persistent_workers=a.workers > 0)
@@ -385,7 +388,8 @@ def main():
                 best = score
                 save(best_path, {'eval': r, 'score': score}, resumable=False)
                 print(f'  new best {best:.4f}', flush=True)
-            if a.schedule == 'wsd' and sched['decay_start'] is None and (sched['flat'] >= a.patience or step >= 0.9 * a.steps):
+            ramped = step >= min(a.steps, a.ramp_steps)   # never stop before every depth has been trained
+            if a.schedule == 'wsd' and sched['decay_start'] is None and ((ramped and sched['flat'] >= a.patience) or step >= 0.9 * a.steps):
                 sched['decay_start'], sched['decay_len'] = step, max(2000, int(a.cooldown * step))
                 print(f"  held-out scores flat for {sched['flat']} evaluations: decaying the rate over "
                       f"{sched['decay_len']} steps, then stopping", flush=True)
