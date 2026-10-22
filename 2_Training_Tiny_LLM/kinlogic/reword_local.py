@@ -34,7 +34,8 @@ class Backend:
         try:
             from vllm import LLM, SamplingParams
             self.sp = SamplingParams
-            self.llm = LLM(model=model, dtype='float16', max_model_len=4096, gpu_memory_utilization=0.90)
+            self.llm = LLM(model=model, dtype='float16', max_model_len=4096, gpu_memory_utilization=0.90,
+                           enable_prefix_caching=True)   # every prompt shares a long fixed preamble
             self.kind = 'vllm'
         except Exception as e:   # not installed, or this vLLM does not run on the GPU (T4 is compute 7.5)
             print('vLLM unavailable:', type(e).__name__, str(e)[:120], '-> transformers', flush=True)
@@ -126,12 +127,36 @@ def main():
     be = Backend(a.model)
     kept, tried, t0 = len(done), 0, time.time()
     words = ', '.join(sorted(KIN))
+    pending = None   # verification of the previous chunk runs on the CPUs while the GPU writes the next one
+
+    def finish(job):
+        nonlocal kept, tried
+        batch, ok, raws, why, eg, futs = job
+        got = []
+        for ((ex, new), raw), fut in zip(zip(ok, raws), futs):
+            g, r = fut.result()
+            why[r] = why.get(r, 0) + 1
+            if g:
+                got.append(g)
+            elif r not in eg:
+                eg[r] = f'{new[:100]} => {raw[:140]}'.replace('\n', ' ')
+        with gzip.open(a.out, 'at') as f:   # one complete block per chunk
+            for g in got:
+                f.write(json.dumps(g, ensure_ascii=False) + '\n')
+        tried += len(batch)
+        kept += len(got)
+        rate = tried / max(1e-9, time.time() - t0) * 3600
+        print(f'{tried} tried, {kept} kept in total ({len(got)}/{len(batch)} this chunk), {rate:.0f} tried/hour | '
+              + ', '.join(f'{k} {v}' for k, v in sorted(why.items(), key=lambda kv: -kv[1])), flush=True)
+        for k, v in eg.items():
+            print(f'   e.g. {k}: {v}', flush=True)
+
     with ProcessPoolExecutor(a.workers) as pool:
         for i in range(0, len(rows), a.chunk):
             if kept >= a.n:
                 break
             batch = rows[i:i + a.chunk]
-            news = [clean(t) for t in be.chat([REWRITE.format(q=ex['text']) for ex in batch], 0.9, 400)]
+            news = [clean(t) for t in be.chat([REWRITE.format(q=ex['text']) for ex in batch], 0.9, 300)]
             ok, why, eg = [], {}, {}
             for ex, new in zip(batch, news):
                 names = [e['text'] for e in prepare(ex['text'])['ents'] if e['kind'] in ('name', 'letter')]
@@ -141,24 +166,13 @@ def main():
                     eg.setdefault(r, new[:120])
                 else:
                     ok.append((ex, new))
-            raws = be.chat([EXTRACT.format(q=new, words=words) for _, new in ok], 0.0, 600) if ok else []
-            got = []
-            for ((ex, new), raw), (g, r) in zip(zip(ok, raws), pool.map(_verify, [(ex, new, raw) for (ex, new), raw in zip(ok, raws)], chunksize=8)):
-                why[r] = why.get(r, 0) + 1
-                if g:
-                    got.append(g)
-                elif r not in eg:
-                    eg[r] = f'{new[:100]} => {raw[:140]}'.replace('\n', ' ')
-            with gzip.open(a.out, 'at') as f:   # one complete block per chunk
-                for g in got:
-                    f.write(json.dumps(g, ensure_ascii=False) + '\n')
-            tried += len(batch)
-            kept += len(got)
-            rate = tried / max(1e-9, time.time() - t0) * 3600
-            print(f'{tried} tried, {kept} kept in total ({len(got)}/{len(batch)} this chunk), {rate:.0f} tried/hour | '
-                  + ', '.join(f'{k} {v}' for k, v in sorted(why.items(), key=lambda kv: -kv[1])), flush=True)
-            for k, v in eg.items():
-                print(f'   e.g. {k}: {v}', flush=True)
+            raws = be.chat([EXTRACT.format(q=new, words=words) for _, new in ok], 0.0, 400) if ok else []
+            futs = [pool.submit(_verify, (ex, new, raw)) for (ex, new), raw in zip(ok, raws)]
+            if pending:
+                finish(pending)
+            pending = (batch, ok, raws, why, eg, futs)
+        if pending:
+            finish(pending)
     print(f'done: {kept} kept in {a.out}')
 
 
