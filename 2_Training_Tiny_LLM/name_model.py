@@ -69,7 +69,7 @@ def load_table(path):
     rows = {'train': [], 'val': [], 'test': []}
     with gzip.open(path, 'rt', newline='') as f:
         for r in csv.DictReader(f, delimiter='\t'):
-            rows[r['split']].append((r['name'], float(r['p_female']), int(r['support'])))
+            rows[r['split']].append((r['name'], float(r['p_female']), int(r['support']), r['sources']))
     return rows
 
 
@@ -100,9 +100,10 @@ def pick_thresholds(ps, gold, max_wrong):
     return round(float(grid[i]), 2), round(float(1 - grid[j]), 2)   # float32 grid values would miss p == t
 
 
-def clear(rows, lo=0.1, hi=0.9, min_support=20):
-    """Names whose data gender is clear and well supported: (name, 'M'|'F')."""
-    return [(n, 'F' if p >= hi else 'M') for n, p, s in rows if s >= min_support and (p >= hi or p <= lo)]
+def clear(rows, lo=0.1, hi=0.9, min_support=100):
+    """Names whose data gender is clear and well supported: (name, 'M'|'F'). Below ~100 the set is mostly WGND
+    one-country entries (surnames, villages) whose labels are noise, which would make thresholds needlessly cautious."""
+    return [(n, 'F' if p >= hi else 'M') for n, p, s, _ in rows if s >= min_support and (p >= hi or p <= lo)]
 
 
 def report(model, rows, device, t_male, t_female):
@@ -127,12 +128,12 @@ def train(a):
     dev = torch.device(a.device)
     rows = load_table(a.data)
     tr = rows['train']
-    w = torch.tensor([min(s, 5000) ** 0.5 for _, _, s in tr])   # well-evidenced names dominate; 2.4M weak WGND entries are noisy
+    w = torch.tensor([min(s, 5000) ** 0.5 * (0.25 if src == 'wgnd' else 1.0) for _, _, s, src in tr])   # counted sources dominate
     X = torch.zeros(len(tr), MAX_LEN, dtype=torch.uint8)   # encoded once
-    for k, (n, _, _) in enumerate(tr):
+    for k, (n, _, _, _) in enumerate(tr):
         e = encode(n)
         X[k, :len(e)] = torch.tensor(e, dtype=torch.uint8)
-    X, Y = X.to(dev), torch.tensor([p for _, p, _ in tr]).to(dev)
+    X, Y = X.to(dev), torch.tensor([p for _, p, _, _ in tr]).to(dev)
     model = NameModel().to(dev)
     print(f'{sum(p.numel() for p in model.parameters())} parameters; train {len(tr)}, val {len(rows["val"])}', flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.01)
@@ -171,7 +172,9 @@ def finish(out, rows, dev, max_wrong):
     ps = predict(model, [n for n, _ in val_clear], dev)
     t_male, t_female = pick_thresholds(ps, [g for _, g in val_clear], max_wrong)
     held, unisex = curated_sets()
-    res = report(model, {'test (data)': clear(rows['test']), 'curated held-out': held}, dev, t_male, t_female)
+    counted = [r for r in rows['test'] if r[3] != 'wgnd']
+    res = report(model, {'test (support >= 100)': clear(rows['test']), 'test (naampy/SSA names)': clear(counted, min_support=20),
+                         'curated held-out': held}, dev, t_male, t_female)
     up = predict(model, unisex, dev)
     res['unisex left open'] = f'{sum(decide(p, t_male, t_female) is None for p in up)}/{len(unisex)}'
     ck.update({'t_male': t_male, 't_female': t_female, 'results': res})
