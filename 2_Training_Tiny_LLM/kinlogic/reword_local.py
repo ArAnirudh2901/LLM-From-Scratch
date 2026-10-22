@@ -103,21 +103,46 @@ def _verify(job):
         return None, 'error ' + type(e).__name__
 
 
+def _parts(out):
+    """Files holding kept rows: `out` itself, or every part in `out` when it is a folder."""
+    if out.endswith('.gz'):
+        return [out] if os.path.exists(out) else []
+    return sorted(glob.glob(os.path.join(out, 'part-*.jsonl.gz')))
+
+
 def done_sources(out):
     done = set()
-    if os.path.exists(out):
+    for path in _parts(out):
         try:
-            for l in gzip.open(out, 'rt'):
+            for l in gzip.open(path, 'rt'):
                 done.add(json.loads(l)['source'])
         except (EOFError, OSError, ValueError):
             pass
     return done
 
 
+def write_rows(out, rows):
+    """A folder `out` gets one new part file per chunk (Drive's mount uploads whole files on close; appends to one
+    file were lost when a session died); a .gz path gets the rows appended as one complete block."""
+    if not rows:
+        return
+    if out.endswith('.gz'):
+        with gzip.open(out, 'at') as f:
+            f.write(''.join(json.dumps(g, ensure_ascii=False) + '\n' for g in rows))
+        return
+    os.makedirs(out, exist_ok=True)
+    tmp = f'/tmp/part-{os.getpid()}-{time.time_ns()}.jsonl.gz'
+    with gzip.open(tmp, 'wt') as f:
+        f.write(''.join(json.dumps(g, ensure_ascii=False) + '\n' for g in rows))
+    import shutil
+    shutil.copy(tmp, os.path.join(out, os.path.basename(tmp)))
+    os.remove(tmp)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--src', default='data/dataset_v2')
-    ap.add_argument('--out', default='data/reworded_local.jsonl.gz')
+    ap.add_argument('--out', default='data/reworded_parts', help='a folder (one part file per chunk) or a .jsonl.gz file')
     ap.add_argument('--n', type=int, default=20000, help='kept rewordings wanted (counting earlier runs)')
     ap.add_argument('--chunk', type=int, default=1024)
     ap.add_argument('--model', default=MODEL)
@@ -141,9 +166,7 @@ def main():
                 got.append(g)
             elif r not in eg:
                 eg[r] = f'{new[:100]} => {raw[:140]}'.replace('\n', ' ')
-        with gzip.open(a.out, 'at') as f:   # one complete block per chunk
-            for g in got:
-                f.write(json.dumps(g, ensure_ascii=False) + '\n')
+        write_rows(a.out, got)
         tried += len(batch)
         kept += len(got)
         rate = tried / max(1e-9, time.time() - t0) * 3600
