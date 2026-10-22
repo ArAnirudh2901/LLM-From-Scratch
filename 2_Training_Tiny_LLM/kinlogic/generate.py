@@ -1056,14 +1056,25 @@ def q_puzzle(rng) -> dict | None:
             y = rng.choice(order)
             if y != x:
                 same = fam.g(x) == fam.g(y)
-                clues.append((f'{rx.surface} and {by[y].surface} are of the {"same" if same else "opposite"} gender',
+                a, b, word = rx.surface, by[y].surface, 'same' if same else 'opposite'
+                clues.append((rng.choice([f'{a} and {b} are of the {word} gender', f"{poss(a)} and {poss(b)} gender is {word}",
+                                          f'{a} and {b} are of {word} gender', f"{a}'s gender is the {word} as {b}'s" if same else f'{a} and {b} have opposite genders']),
                               [{'t': 'same' if same else 'opposite', 'x': rx, 'y': by[y]}]))
     if rng.random() < 0.5:
         rng.shuffle(clues)
+    if not any(w.children(m) and w.spouse(m) < 0 for m in fam.people) and rng.random() < 0.3:   # real puzzles say this a lot
+        clues.insert(0, (rng.choice(['There is no single parent in the family', 'No single person in the family is a parent',
+                                     'None of the members is a single parent', 'There are no single parents in the family',
+                                     'No one in the family is a single parent']), [{'t': 'singles', 'n': 0}]))
     i = 0
     while i < len(clues):   # sometimes two clues share a sentence
-        if i + 1 < len(clues) and rng.random() < 0.25:
+        if i + 1 < len(clues) and rng.random() < 0.35:
             (c1, f1), (c2, f2) = clues[i], clues[i + 1]
+            last = c1.split()[-1]
+            if c2.startswith(last + ' is ') and rng.random() < 0.6:   # "N is the mother-in-law of G, who is the sister of I"
+                q.add(cap(c1) + ', who ' + c2[len(last) + 1:] + '.', f1 + f2)
+                i += 2
+                continue
             c2 = c2[0].lower() + c2[1:] if c2.startswith('The ') else c2
             q.add(cap(c1) + rng.choice([' and ', '; ', ', while ']) + c2 + '.', f1 + f2)
             i += 2

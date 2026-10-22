@@ -9,7 +9,7 @@ Facts
     x no-sibling | no-brother | no-sister | no-child | unmarried | married
     x opposite y | x same y                       genders differ / match
     x has N [side] REL                            exactly N such relatives ("has only daughters": has 0 son)
-    members N | couples N | generations N | males N | females N     closed-family puzzle facts
+    members N | couples N | generations N | males N | females N | singles N   closed-family puzzle facts (singles: single parents)
 Questions
     ask x y               how is y related to x?
     who x [side] REL      who is x's REL?
@@ -30,7 +30,7 @@ from .kin import KIN, NONKIN, ONLY, SIDED
 ATTRS = ['no-sibling', 'no-brother', 'no-sister', 'no-child', 'unmarried', 'married']
 COUNTABLE = ['male', 'female', 'people', 'couples']
 SIDES = ['paternal', 'maternal']
-PUZZLE = ['members', 'couples', 'generations', 'males', 'females']
+PUZZLE = ['members', 'couples', 'generations', 'males', 'females', 'singles']
 GROUPS = ['part', 'claim']
 QUESTIONS = ['ask', 'who', 'count', 'gender', 'pair']
 KEYWORDS = [';', *QUESTIONS, *PUZZLE, *GROUPS, 'not', 'only', 'has', 'male', 'female', 'opposite', 'same',

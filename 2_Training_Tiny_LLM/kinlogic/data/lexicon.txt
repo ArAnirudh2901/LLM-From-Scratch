@@ -6,6 +6,7 @@ a-h
 a-j
 a-o
 a-p
+a-w
 a-x
 a-y
 abandoned
@@ -398,8 +399,10 @@ by
 bye
 c-a-q
 c-d
+c-f
 c-g
 c-h
+c-j
 c-l
 c-m
 c-n
@@ -693,6 +696,7 @@ d-l
 d-m
 d-o
 d-r
+d-u
 dad
 dada
 dadi
@@ -977,6 +981,7 @@ f-n
 f-p
 f-q
 f-s
+f-t
 f-v
 f-w
 f-y
@@ -1153,6 +1158,7 @@ furious
 furniture
 further
 g-a
+g-f
 g-h
 g-l
 g-o
@@ -1179,6 +1185,7 @@ gave
 gay
 ge
 gender
+genders
 generation
 generations
 genes
@@ -1377,6 +1384,7 @@ h-c
 h-d
 h-e
 h-f
+h-g
 h-m
 h-n
 h-r
@@ -1607,6 +1615,7 @@ j-h
 j-k
 j-k-l
 j-o
+j-s
 j-s-u
 j-t
 j-u
@@ -1633,10 +1642,13 @@ jump
 just
 k-b
 k-c
+k-d
 k-f
 k-h
 k-l
+k-l-m
 k-o
+k-s
 k-t-f
 k-u
 k-v
@@ -1667,14 +1679,17 @@ knitting
 know
 knowing
 knows
+l-a
 l-d
 l-f
 l-k
 l-m
 l-m-n
 l-o
+l-p
 l-r
 l-t
+l-u
 l-x
 l-y
 ladies
@@ -1782,11 +1797,13 @@ lunch
 lure
 m-c
 m-h
+m-l
 m-n
 m-r
 m-s
 m-t
 m-w
+m-x
 m-z
 machine
 mad
@@ -2313,6 +2330,7 @@ r-s-t
 r-t
 r-u-g
 r-v
+r-w
 r-y
 race
 raced
@@ -2468,6 +2486,7 @@ s-g
 s-j
 s-l
 s-m
+s-p
 s-q
 s-r
 s-t
@@ -2833,6 +2852,7 @@ t-u
 t-u-v
 t-v
 t-w
+t-x
 t-y-b
 table
 tackle
@@ -3062,6 +3082,7 @@ used
 using
 usually
 v
+v-a
 v-d
 v-e
 v-f
@@ -3077,6 +3098,7 @@ v-t
 v-u
 v-w
 v-x
+v-z-s
 vacation
 vacationed
 vaction
@@ -3108,8 +3130,10 @@ voted
 w-a
 w-d
 w-e
+w-f
 w-g-b
 w-h
+w-j
 w-k
 w-m
 w-r
@@ -3231,6 +3255,7 @@ writing
 wrong
 wrote
 x-g
+x-h
 x-j
 x-l
 x-m

@@ -383,6 +383,7 @@ class _Run:
     males: int | None = None
     females: int | None = None
     generations: int | None = None
+    singles: int | None = None   # parents among the members whose spouse is not a member ("no single parent": 0)
     has: list = field(default_factory=list)
     extra: list = field(default_factory=list)
 
@@ -451,6 +452,8 @@ def _finish(w, run: _Run):
                             # separate groups may sit on any levels relative to each other: only too many is wrong
                             if span > run.generations or (parts == 1 and span != run.generations):
                                 continue
+                        if run.singles is not None and _singles(w6, run) != run.singles:
+                            continue
                         yield w6
 
 
@@ -678,6 +681,11 @@ def _members(w, run):
     return out
 
 
+def _singles(w, run: _Run) -> int:
+    ms = set(_members(w, run))
+    return sum(1 for m in ms if {w.find(c) for c in w.children(m)} & ms and w.spouse(m) not in ms)   # spouse(): -1 when none
+
+
 def _closed_family(w, run: _Run):
     """Closed-family puzzles ("a family of six: A, B, C, D, E and F"): every unnamed person mentioned or implied
     is one of the members (parents made only for siblings may be outside); then the couple count."""
@@ -883,7 +891,7 @@ def solve(stmts: list[dict], label=lambda e: e, asks=(), parts=None, people=(), 
             run.links.append(s)
         elif t == 'has':
             run.has.append(s)
-        elif t in ('members', 'couples', 'males', 'females', 'generations'):
+        elif t in ('members', 'couples', 'males', 'females', 'generations', 'singles'):
             setattr(run, t, s['n'])
     questions += [{'t': 'ask', 'x': x, 'y': y, 'picked': True} for x, y in asks]
     worlds = []
