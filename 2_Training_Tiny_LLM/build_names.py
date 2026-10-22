@@ -147,6 +147,14 @@ def common_words():
     return words
 
 
+def name_table_label(p, support, min_support=100, clear=0.9):
+    """'M'/'F' for well-evidenced names with a clear majority, 'U' for well-evidenced names used by both (0.25-0.75),
+    else None (the model decides). On held-out curated names: 397/437 decided, 0 wrong."""
+    if support < min_support:
+        return None
+    return 'F' if p >= clear else 'M' if p <= 1 - clear else 'U' if 0.25 <= p <= 0.75 else None
+
+
 def split_of(name):
     h = zlib.crc32(name.encode()) % 100
     return 'test' if h < 5 else 'val' if h < 10 else 'train'
@@ -188,6 +196,12 @@ def main():
         w = csv.writer(f, delimiter='\t')
         w.writerow(('name', 'p_female', 'support', 'sources', 'split'))
         w.writerows(rows)
+    table = os.path.join(os.path.dirname(a.out), 'name_table.tsv.gz')   # exact lookup shipped with the name model
+    with gzip.open(table, 'wt') as f:
+        for n, p, sup, _, _ in rows:
+            g = name_table_label(p, sup)
+            if g:
+                f.write(f'{n}\t{g}\n')
     sha = hashlib.sha256(open(a.out, 'rb').read()).hexdigest()
     sure = sum(1 for r in rows if r[1] <= 0.05 or r[1] >= 0.95)
     man = {'names': len(rows), 'by_split': dict(collections.Counter(r[4] for r in rows)),

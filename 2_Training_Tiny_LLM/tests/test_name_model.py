@@ -36,3 +36,16 @@ def test_name_priors_use_the_model_when_present(tmp_path, monkeypatch):
     monkeypatch.setattr(kn, 'MODEL_PATH', str(tmp_path / 'missing.pt'))
     monkeypatch.setattr(kn, '_MODEL', None)
     assert kn.name_priors(ents) == {'@0': 'M'}   # no model: the lists
+
+
+def test_lookup_table_wins_and_marks_unisex(tmp_path, monkeypatch):
+    import gzip
+    import kinlogic.names as kn
+    m = NameModel()
+    torch.save({'model': m.state_dict(), 'config': m.cfg, 't_male': 0.0, 't_female': 1.0}, tmp_path / 'nm.pt')
+    with gzip.open(tmp_path / 'name_table.tsv.gz', 'wt') as f:
+        f.write('rahul\tM\nkim\tU\n')
+    monkeypatch.setattr(kn, 'MODEL_PATH', str(tmp_path / 'nm.pt'))
+    monkeypatch.setattr(kn, '_MODEL', None)
+    monkeypatch.setattr(kn, '_TABLE', None)
+    assert kn.name_gender(['Rahul', 'Kim', 'Zorblax']) == ['M', None, None]   # table, unisex in table, model undecided

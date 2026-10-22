@@ -88,6 +88,20 @@ NAME_GENDER = {**{x.lower(): 'M' for x in INDIAN_M + WORLD_M}, **{x.lower(): 'F'
 MODEL_PATH = os.environ.get('KIN_NAME_MODEL', os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                           'runs', 'names-v1', 'name_model.pt'))
 _MODEL = None
+_TABLE = None
+
+
+def _name_table():
+    """{name: 'M'|'F'|'U'} for names with strong public-record evidence (build_names.py), shipped with the model."""
+    global _TABLE
+    if _TABLE is None:
+        import gzip
+        path = os.path.join(os.path.dirname(MODEL_PATH), 'name_table.tsv.gz')
+        _TABLE = {}
+        if os.path.exists(path):
+            with gzip.open(path, 'rt') as f:
+                _TABLE = dict(line.rstrip('\n').split('\t') for line in f if '\t' in line)
+    return _TABLE
 
 
 def _name_model():
@@ -109,10 +123,19 @@ def _name_model():
 
 
 def name_gender(names: list[str]) -> list[str | None]:
-    """'M', 'F' or None (open) per first name: the name model when trained, else the lists; unisex names stay open."""
-    nm = _name_model()
+    """'M', 'F' or None (open) per first name: the lookup table for well-evidenced names ('U' = used by both: open),
+    the name model for the rest, the lists only when no model is installed; unisex names always stay open."""
+    nm, table = _name_model(), _name_table()
     out = [None] * len(names)
-    todo = [i for i, n in enumerate(names) if n.lower() not in UNISEX]
+    todo = []
+    for i, n in enumerate(names):
+        low = n.lower()
+        if low in UNISEX:
+            continue
+        if low in table:
+            out[i] = table[low] if table[low] in ('M', 'F') else None
+        else:
+            todo.append(i)
     if nm:
         from name_model import decide, predict
         model, tm, tf = nm
