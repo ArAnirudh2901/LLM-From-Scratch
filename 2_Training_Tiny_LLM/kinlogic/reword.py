@@ -182,6 +182,69 @@ def same_meaning(original: dict, lf: str, ents) -> bool:
     return entails(orig, lf, people) and entails(lf, orig, people)
 
 
+REWRITE_BATCH = """Rewrite each numbered blood-relation question below as it might appear in a different competitive exam
+(bank PO, SSC, CAT, UPSC CSAT). For each one, change the wording and sentence structure freely, but:
+- keep every person's name or letter exactly as written: each one must appear in your version,
+- keep every relation word exactly (never replace 'son' with 'child' or 'mother' with 'parent'),
+- keep every family relationship and every stated gender (sentences like "X is a woman", pronouns),
+- keep the final question asking about the same two people; no answer options, no answer,
+- plain text only: no LaTeX, markdown or bullet points.
+Return JSON only: {{"rewrites": ["rewrite of question 1", "rewrite of question 2", ...]}} with exactly {n} items in order.
+
+{questions}"""
+
+EXTRACT_BATCH = """For each numbered blood-relation question below, list its family facts. Return JSON only:
+{{"readings": [{{"facts": [...], "genders": [...], "ask": {{...}}}}, ...]}} with exactly {n} items in order, each in the form
+{{"facts": [{{"person": "X", "is_the": "relation", "of": "Y"}}, ...], "genders": [{{"person": "X", "gender": "male" or "female"}}, ...],
+ "ask": {{"how_is": "B", "related_to": "A"}}}}
+Write each fact as the text states it ("X is the son of Y" -> person X, is_the son, of Y; "Y's daughter is X" -> person X,
+is_the daughter, of Y), keeping the exact relation word. List a gender whenever the text shows it (he/she, his/her, a man,
+a woman): "Vani and her son Irfan" -> Vani female. Use "#1", "#2" for people the text mentions without a name; facts of one
+question never mention people of another. Relation words allowed: {words}. Use names exactly as written.
+
+{questions}"""
+
+
+def _numbered(texts):
+    return '\n\n'.join(f'Question {i + 1}: {t}' for i, t in enumerate(texts))
+
+
+def reword_batch(exs: list[dict], provider: str) -> list[dict | None]:
+    """Rewrites and readings for several questions in two requests; the same checks as reword_one for each."""
+    raw = call(REWRITE_BATCH.format(n=len(exs), questions=_numbered([e['text'] for e in exs])), provider, temperature=0.7, json_out=True)
+    try:
+        news = [clean(str(t)) for t in json.loads(re.search(r'\{.*\}', raw, re.S).group(0))['rewrites']]
+    except (AttributeError, ValueError, KeyError, TypeError):
+        return [None] * len(exs)
+    if len(news) != len(exs):
+        return [None] * len(exs)
+    keep = [i for i, (ex, new) in enumerate(zip(exs, news))
+            if new and all(n.lower() in new.lower() for n in needed(ex)) and not re.search(r'\\[a-z]+|\$[A-Za-z]|\*\*|^\s*[-*] ', new, re.M)]
+    out = [None] * len(exs)
+    if not keep:
+        return out
+    raw = call(EXTRACT_BATCH.format(n=len(keep), words=', '.join(sorted(KIN)), questions=_numbered([news[i] for i in keep])),
+               provider, temperature=0.0, json_out=True,
+               model=os.environ.get('REWORD_EXTRACT_MODEL', 'gemini-flash-lite-latest') if provider == 'gemini' else None)
+    try:
+        readings = json.loads(re.search(r'\{.*\}', raw, re.S).group(0))['readings']
+    except (AttributeError, ValueError, KeyError, TypeError):
+        return out
+    if len(readings) != len(keep):
+        return out
+    for i, reading in zip(keep, readings):
+        ex, new = exs[i], news[i]
+        p = prepare(new)
+        try:
+            lf = to_facts(reading, p['ents'])
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if lf and accept(lf, ex['truth'], p['tokens']) and same_meaning(ex, lf, p['ents']):
+            out[i] = {'kind': 'reworded-' + ex['kind'], 'text': new, 'tokens': p['tokens'], 'lf': lf, 'truth': ex['truth'],
+                      'depth': ex.get('depth'), 'source': hashlib.sha1(ex['text'].encode()).hexdigest()}
+    return out
+
+
 def reword_one(ex: dict, provider: str) -> dict | None:
     names = needed(ex)
     new = clean(call(REWRITE.format(q=ex['text']), provider))
@@ -209,7 +272,8 @@ def main():
     ap.add_argument('--out', default='data/reworded.jsonl.gz')
     ap.add_argument('--n', type=int, default=2000)
     ap.add_argument('--provider', default='gemini' if os.environ.get('GEMINI_API_KEY') else 'anthropic')
-    ap.add_argument('--pause', type=float, default=4.0, help='seconds between questions (one call per model each; free-tier rate limits)')
+    ap.add_argument('--pause', type=float, default=6.0, help='seconds between batches (two requests each, one per model)')
+    ap.add_argument('--batch', type=int, default=10, help='questions per request (1 = one request per question)')
     a = ap.parse_args()
     files = [f for f in sorted(glob.glob(f'{a.src}/**/*.jsonl.gz', recursive=True)) if '/test/' not in f]   # never the locked test
     rng = random.Random(0)
@@ -229,29 +293,28 @@ def main():
         except (EOFError, OSError, ValueError):
             pass
     kept = tried = 0
-    if True:   # each kept row is appended as its own complete gzip block: a killed run never damages earlier rows
-        for ex in rows:
-            if kept + len(done) >= a.n:
-                break
-            if hashlib.sha1(ex['text'].encode()).hexdigest() in done:
-                continue
-            tried += 1
-            try:
-                got = reword_one(ex, a.provider)
-            except Exception as e:   # rate limit or network: back off and go on
-                waits = getattr(main, 'waits', 0) + 1
-                main.waits = waits
-                print('call failed:', type(e).__name__, str(e)[:120], flush=True)
-                time.sleep(min(300, 15 * waits))
-                continue
-            main.waits = 0
-            if got:
-                with gzip.open(a.out, 'at') as f:
-                    f.write(json.dumps(got, ensure_ascii=False) + '\n')
+    todo = [ex for ex in rows if hashlib.sha1(ex['text'].encode()).hexdigest() not in done]
+    waits = 0
+    i = 0
+    while i < len(todo) and kept + len(done) < a.n:
+        batch = todo[i:i + a.batch]
+        try:
+            got = reword_batch(batch, a.provider) if a.batch > 1 else [reword_one(batch[0], a.provider)]
+        except Exception as e:   # rate limit or network: back off (longer each time), retry the same batch
+            waits += 1
+            print('call failed:', type(e).__name__, str(e)[:100], f'- waiting {min(600, 20 * 2 ** min(waits, 5))}s', flush=True)
+            time.sleep(min(600, 20 * 2 ** min(waits, 5)))
+            continue
+        waits = 0
+        i += len(batch)
+        tried += len(batch)
+        for g in got:
+            if g:
+                with gzip.open(a.out, 'at') as f:   # its own complete block: a killed run never damages earlier rows
+                    f.write(json.dumps(g, ensure_ascii=False) + '\n')
                 kept += 1
-            if tried % 20 == 0:
-                print(f'{tried} tried, {kept} kept ({kept / tried:.0%})', flush=True)
-            time.sleep(a.pause)
+        print(f'{tried} tried, {kept} kept ({kept / tried:.0%}), {len(got and [g for g in got if g])}/{len(batch)} this batch', flush=True)
+        time.sleep(a.pause)
     print(f'done: {kept} new rewrites kept of {tried} tried; {kept + len(done)} in {a.out}')
 
 
