@@ -21,7 +21,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 from .kin import KIN
 from .prepare import prepare
-from .reword import EXTRACT, REWRITE, accept, same_meaning, to_facts
+from .reword import EXTRACT, REWRITE, accept, clean, same_meaning, to_facts
 
 MODEL = 'Qwen/Qwen3-4B-Instruct-2507'
 BAD = re.compile(r'\\[a-z]+|\$[A-Za-z]|\*\*|^\s*[-*] ', re.M)
@@ -78,18 +78,27 @@ def sample_sources(src, n, seed=0):
 
 
 def _verify(job):
-    """CPU side of one candidate: returns the training row or None."""
+    """CPU side of one candidate: (training row or None, reason)."""
     ex, new, raw = job
     try:
         p = prepare(new)
         m = re.search(r'\{.*\}', raw, re.S)
-        lf = to_facts(json.loads(m.group(0)), p['ents']) if m else None
-        if lf is None or not accept(lf, ex['truth'], p['tokens']) or not same_meaning(ex, lf, p['ents']):
-            return None
+        if not m:
+            return None, 'no json'
+        try:
+            lf = to_facts(json.loads(m.group(0)), p['ents'])
+        except (ValueError, TypeError, AttributeError):
+            return None, 'bad json'
+        if lf is None:
+            return None, 'unmapped fact'
+        if not accept(lf, ex['truth'], p['tokens']):
+            return None, 'wrong answer'
+        if not same_meaning(ex, lf, p['ents']):
+            return None, 'meaning differs'
         return {'kind': 'reworded-' + ex['kind'], 'text': new, 'tokens': p['tokens'], 'lf': lf, 'truth': ex['truth'],
-                'depth': ex.get('depth'), 'source': hashlib.sha1(ex['text'].encode()).hexdigest()}
-    except Exception:
-        return None
+                'depth': ex.get('depth'), 'source': hashlib.sha1(ex['text'].encode()).hexdigest()}, 'kept'
+    except Exception as e:
+        return None, 'error ' + type(e).__name__
 
 
 def done_sources(out):
@@ -122,21 +131,34 @@ def main():
             if kept >= a.n:
                 break
             batch = rows[i:i + a.chunk]
-            news = be.chat([REWRITE.format(q=ex['text']) for ex in batch], 0.9, 400)
-            ok = []
+            news = [clean(t) for t in be.chat([REWRITE.format(q=ex['text']) for ex in batch], 0.9, 400)]
+            ok, why, eg = [], {}, {}
             for ex, new in zip(batch, news):
                 names = [e['text'] for e in prepare(ex['text'])['ents'] if e['kind'] in ('name', 'letter')]
-                if new and not BAD.search(new) and all(nm.lower() in new.lower() for nm in names):
+                r = 'latex/markdown' if not new or BAD.search(new) else 'names lost' if not all(nm.lower() in new.lower() for nm in names) else None
+                if r:
+                    why[r] = why.get(r, 0) + 1
+                    eg.setdefault(r, new[:120])
+                else:
                     ok.append((ex, new))
             raws = be.chat([EXTRACT.format(q=new, words=words) for _, new in ok], 0.0, 600) if ok else []
-            got = [g for g in pool.map(_verify, [(ex, new, raw) for (ex, new), raw in zip(ok, raws)], chunksize=8) if g]
+            got = []
+            for ((ex, new), raw), (g, r) in zip(zip(ok, raws), pool.map(_verify, [(ex, new, raw) for (ex, new), raw in zip(ok, raws)], chunksize=8)):
+                why[r] = why.get(r, 0) + 1
+                if g:
+                    got.append(g)
+                elif r not in eg:
+                    eg[r] = f'{new[:100]} => {raw[:140]}'.replace('\n', ' ')
             with gzip.open(a.out, 'at') as f:   # one complete block per chunk
                 for g in got:
                     f.write(json.dumps(g, ensure_ascii=False) + '\n')
             tried += len(batch)
             kept += len(got)
             rate = tried / max(1e-9, time.time() - t0) * 3600
-            print(f'{tried} tried, {kept} kept in total ({len(got)}/{len(batch)} this chunk), {rate:.0f} tried/hour', flush=True)
+            print(f'{tried} tried, {kept} kept in total ({len(got)}/{len(batch)} this chunk), {rate:.0f} tried/hour | '
+                  + ', '.join(f'{k} {v}' for k, v in sorted(why.items(), key=lambda kv: -kv[1])), flush=True)
+            for k, v in eg.items():
+                print(f'   e.g. {k}: {v}', flush=True)
     print(f'done: {kept} kept in {a.out}')
 
 

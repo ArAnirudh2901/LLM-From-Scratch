@@ -34,7 +34,8 @@ from .prepare import prepare
 REWRITE = """Rewrite this blood-relation reasoning question as it might appear in a different competitive exam
 (bank PO, SSC, CAT, UPSC CSAT). Change the wording and sentence structure freely, but:
 - keep every person's name or letter exactly as written,
-- keep every family relationship and every stated gender exactly (no new facts, none dropped),
+- keep every family relationship and every stated gender exactly (no new facts, none dropped; keep sentences like
+  "X is a woman" or pronouns that show a gender),
 - keep the final question asking about the same two people,
 - do not add answer options or an answer,
 - plain text only: no LaTeX, markdown or bullet points; copy code symbols (like $, #, @, ×) exactly as written.
@@ -75,6 +76,13 @@ def call(prompt: str, provider: str, temperature: float = 0.9, json_out: bool = 
               {'model': model, 'max_tokens': 800, 'temperature': temperature, 'messages': [{'role': 'user', 'content': prompt}]},
               {'x-api-key': key, 'anthropic-version': '2023-06-01'})
     return r['content'][0]['text'].strip()
+
+
+def clean(text: str) -> str:
+    """The rewritten question without a preamble ("Rewritten question:") or wrapping quotes."""
+    t = text.strip()
+    t = re.sub(r'^(?:here is|here\'s)?[^\n:]{0,40}(?:question|version)[^\n:]{0,20}:\s*', '', t, flags=re.I)
+    return t.strip().strip('"“”').strip()
 
 
 def to_facts(extracted: dict, ents: list[dict]) -> str | None:
@@ -135,7 +143,7 @@ def same_meaning(original: dict, lf: str, ents) -> bool:
 
 def reword_one(ex: dict, provider: str) -> dict | None:
     names = [e['text'] for e in prepare(ex['text'])['ents'] if e['kind'] in ('name', 'letter')]
-    new = call(REWRITE.format(q=ex['text']), provider)
+    new = clean(call(REWRITE.format(q=ex['text']), provider))
     if not new or any(n.lower() not in new.lower() for n in names) or re.search(r'\\[a-z]+|\$[A-Za-z]|\*\*|^\s*[-*] ', new, re.M):
         return None
     p = prepare(new)
