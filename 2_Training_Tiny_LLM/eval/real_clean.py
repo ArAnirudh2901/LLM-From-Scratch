@@ -39,6 +39,12 @@ def broken(r) -> str | None:
         defined |= set(re.findall(r"['‘]?\s*[A-Za-z]\s*([^\w\s'’,.()\-?])\s*[A-Za-z]\s*['’]?\s*(?:means|implies|denotes)", q))
         if defined and used - defined:
             return 'undefined code symbol'
+    from kinlogic.codes import definitions, QUOTES
+    from kinlogic.prepare import prepare
+    if re.search(r'\bmeans?\b', q, re.I) and EXPR_SYM.search(q):
+        toks = [t for t in prepare(q)['tokens'] if t not in QUOTES]
+        if definitions(' '.join(toks)) is None:   # one symbol defined twice with different meanings: a symbol lost in scraping
+            return 'conflicting code definitions'
     if not r['options'] and not ASK.search(q):
         return 'no question'
     return None

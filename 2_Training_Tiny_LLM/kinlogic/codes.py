@@ -167,7 +167,18 @@ def read(tokens, options=None, ents=None) -> str | None:
         return None if r is None else f"claim 1 ; {q} {(r[0] + ' ') if r[0] else ''}{r[1]} {p}"
     asked = set(re.findall(r'@\d+', ' '.join(re.findall(r'(?:how is|what is|relation|between|related)[^?.]*', text))))
     runs = [r for r in runs if len(set(r[::2]) & asked) >= 2] or runs   # options or page junk also look like expressions
-    claims = option_claims(options, {e['text']: e['id'] for e in ents or [] if e['kind'] in ('name', 'letter')}) if options else None
+    ids = {e['text']: e['id'] for e in ents or [] if e['kind'] in ('name', 'letter')}
+    claims = option_claims(options, ids) if options else None
+    if not claims and options and all(re.fullmatch(r'(?:only |both |all |neither |none |either |)[ivx ,and&]+(?: and [ivx]+)?|none of (?:these|the above)|all of (?:these|the above)', o.strip().lower()) for _, o in options):
+        stmts = re.findall(r'\b(i{1,3}|iv)\s*[.)]\s*(@\d+) is (?:the )?((?:paternal |maternal )?[a-z][a-z-]*) (?:of|to) (@\d+)', text)
+        if len(stmts) >= 2:
+            claims = []
+            for n, (_, x, rel, y) in enumerate(stmts, 1):
+                r = _rel(rel)
+                if r is None:
+                    claims = None
+                    break
+                claims += [f'claim {n}', f"{y} {(r[0] + ' ') if r[0] else ''}{r[1]} {x}"]
     if len(runs) > 1 and _connected(runs):   # "If F # E, D & F, B % F, A & C # B": one family in several pieces
         runs = [sum(([r] for r in runs), [])]
     if len(runs) != 1:
@@ -177,19 +188,23 @@ def read(tokens, options=None, ents=None) -> str | None:
         runs = runs[-1:]
     runs = runs[0] if isinstance(runs[0][0], list) else runs
     people = set(p for r in runs for p in r[::2])
-    if claims and re.search(r'which (?:of the following|one)[^?]*\b(?:true|correct|false|incorrect)\b', text):
+    if claims and re.search(r'which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect|derived)\b', text):
         return ' ; '.join([f for r in runs for f in facts_of(r, defs)] + claims)
     extra = []
     rel_of = re.search(rf"how is {E} 's {REL} related to {E}", text)        # "how is R's husband related to H?"
-    of_rel = re.search(rf"how is {E} related to {E} 's {REL}", text)        # "how is H related to R's husband?"
+    m = re.search(rf"how is {E} related to {E} 's {REL}", text)             # "how is H related to R's husband?"
+    of_rel = m.groups() if m else None                                     # (asked person, anchor, relation)
+    if of_rel is None:
+        m = re.search(rf"how is {E} related to (?:the )?{REL} of {E}", text)   # "how is S related to the father of J?"
+        of_rel = (m.group(1), m.group(3), m.group(2)) if m else None
     if rel_of and _rel(rel_of.group(2)):
         a, rel, x = rel_of.groups()
         side, w = _rel(rel)
         extra, y = [f"{a} {(side + ' ') if side else ''}{w} #1"], '#1'
         if a not in people or x not in people:
             return None
-    elif of_rel and _rel(of_rel.group(3)):
-        y, a, rel = of_rel.groups()
+    elif of_rel and _rel(of_rel[2]):
+        y, a, rel = of_rel
         side, w = _rel(rel)
         extra, x = [f"{a} {(side + ' ') if side else ''}{w} #1"], '#1'
         if a not in people or y not in people:

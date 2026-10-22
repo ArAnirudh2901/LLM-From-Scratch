@@ -282,7 +282,7 @@ def _claims(stmts, options, low, people, priors):
     if re.search(r"cannot be (?:definitely )?true|can.?t be (?:definitely )?true|not (?:definitely|necessarily) true", low):
         want, hits = 'not definitely true', {k for k, v in verdicts.items() if v != 'true'}
     else:
-        want = 'false' if re.search(r'\bfalse\b|not true|incorrect', low) else 'true'
+        want = 'false' if re.search(r"\bfalse\b|not true|incorrect|not correct|cannot be derived|can't be derived|not be derived", low) else 'true'
         hits = {k for k, v in verdicts.items() if v == want}
     ans = f"{len(hits)} statement{'s' if len(hits) != 1 else ''} {want}: " + (', '.join(str(k) for k in sorted(hits)) or 'none')
     lab = None
