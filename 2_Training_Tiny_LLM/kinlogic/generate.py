@@ -513,9 +513,15 @@ def q_statements(rng) -> dict | None:
                     break
         elif rng.random() < 0.06 and w.father(x) >= 0 and w.mother(x) >= 0:
             rx, rf, rm = q.ref(x), q.ref(w.father(x)), q.ref(w.mother(x))
-            clauses.append((rng.choice([f'{rf.surface} and {rm.surface} are the parents of {rx.surface}',
-                                        f"{poss(rx.surface)} parents are {rf.surface} and {rm.surface}"]),
-                            [F(rx, 'parent', rf), F(rx, 'parent', rm)]))
+            kid = 'son' if fam.g(x) == 'M' else 'daughter'
+            if w.spouse(w.father(x)) == w.mother(x) and rng.random() < 0.6:   # "X and Y are married, and Z is their son"
+                clauses.append((rng.choice([f'{rf.surface} and {rm.surface} are married, and {rx.surface} is their {kid}',
+                                            f'{rf.surface} and his wife {rm.surface} have {an(kid)}, {rx.surface}']),
+                                [F(rf, 'wife', rm), F(rf, kid, rx), F(rm, kid, rx)]))
+            else:
+                clauses.append((rng.choice([f'{rf.surface} and {rm.surface} are the parents of {rx.surface}',
+                                            f"{poss(rx.surface)} parents are {rf.surface} and {rm.surface}"]),
+                                [F(rx, 'parent', rf), F(rx, 'parent', rm)]))
     if rng.random() < 0.4:
         rng.shuffle(clauses)
     clauses = _relative_clauses(rng, clauses)

@@ -149,6 +149,9 @@ def main():
                         continue
                     seen.add(h)
                     buckets[b].append(r)
+            for b in open_:   # saved every round: an interrupted build (sleep, crash) resumes from here
+                _save(_path(b, test_path), [r for r in buckets[b]] if b[0] != 'test' else
+                      [r for (t, _, _), rows in buckets.items() if t == 'test' for r in rows])
             done = sum(len(v) for v in buckets.values())
             print(f'round {rnd}: {done} questions, {len(open_)} buckets were open, {time.time() - t0:.0f}s', flush=True)
             if rnd > 200:
@@ -172,6 +175,11 @@ def main():
                           for f in sorted(glob.glob(f'{OUT}/**/*.jsonl.gz', recursive=True))}
     json.dump(manifest, open(f'{OUT}/manifest.json', 'w'), indent=1)
     print(json.dumps({k: manifest[k] for k in ('total', 'tried', 'rejected', 'seconds')}))
+
+
+def _path(b, test_path):
+    t, f, d = b
+    return test_path if t == 'test' else f'{OUT}/deep/{f}/d{d:02d}.jsonl.gz' if t == 'deep' else f'{OUT}/kinds/{f}.jsonl.gz'
 
 
 def _call(fn, args):

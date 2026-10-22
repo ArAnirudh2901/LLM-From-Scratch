@@ -68,6 +68,13 @@ def render(rng, facts, joint=None):
                 emit(t, [f, nxt], y, [x, y, x2])
                 i += 2
                 continue
+            other = y if x2 is x else x
+            if w in SPOUSE and w2 in CHILD and x2 in (x, y) and joint and joint(x, y, y2) and pick < 0.45:   # "their son"
+                t = rng.choice([f'{x.surface} and {y.surface} are married, and {y2.surface} is their {w2}',
+                                f'{y2.surface} is the {w2} of {x.surface} and {poss(x.surface)} {w} {y.surface}'])
+                emit(t, [f, nxt, F(other, w2, y2)], y2, [x, y, y2])
+                i += 2
+                continue
             if x2 is y and pick < 0.45:   # "whose": "Rina's mother is Saroj, whose husband Bimal is Hari's son"
                 third = facts[i + 2] if i + 2 < len(facts) else None
                 if third and _simple(third) and third['y'] is y2 and rng.random() < 0.5:
@@ -78,13 +85,6 @@ def render(rng, facts, joint=None):
                 t = rng.choice([f'{poss(x.surface)} {w} is {y.surface}, whose {w2} is {y2.surface}',
                                 f'{y.surface} is {_of(rng, x, w)}, and {poss(y.surface)} {w2} is {y2.surface}'])
                 emit(t, [f, nxt], y2, [x, y, y2])
-                i += 2
-                continue
-            other = y if x2 is x else x
-            if w in SPOUSE and w2 in CHILD and x2 in (x, y) and joint and joint(x, y, y2) and pick < 0.45:   # "their son"
-                t = rng.choice([f'{x.surface} and {y.surface} are married, and {y2.surface} is their {w2}',
-                                f'{y2.surface} is the {w2} of {x.surface} and {poss(x.surface)} {w} {y.surface}'])
-                emit(t, [f, nxt, F(other, w2, y2)], y2, [x, y, y2])
                 i += 2
                 continue
         if x.kind in ('name', 'letter') and x.g and pick < 0.12:   # "Om and his brother Jai live in the same town."
