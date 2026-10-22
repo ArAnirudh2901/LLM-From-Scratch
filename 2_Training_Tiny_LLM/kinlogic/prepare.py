@@ -202,8 +202,10 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
         kind = None
         roman_v = t == 'V' and nxt == '.' and roman and (i == 0 or raw[i - 1] in '.?!')
         prv = raw[i - 1].lower() if i else ''
-        letter_i = t == 'I' and letter_names and not roman and nxt not in I_PRONOUN_NEXT and (   # "I is the brother of H"
-            nxt in ('is', 'has', 'does', "'s", 'are') or prv in ('of', 'and', 'by', 'to', 'than', 'with', ','))
+        op = lambda w: bool(re.fullmatch(r'[^\w\s.,?!;:\'"()\[\]]', w))   # a code symbol: "Y × I ÷ W"
+        letter_i = t == 'I' and letter_names and not roman and (
+            (nxt not in I_PRONOUN_NEXT and (nxt in ('is', 'has', 'does', "'s", 'are') or prv in ('of', 'and', 'by', 'to', 'than', 'with', ',')))   # "I is the brother of H"
+            or op(prv) or op(nxt) or (prv == 'is' and nxt in ('related', 'connected')) or (prv == 'how' and nxt == 'is'))
         if re.fullmatch(r'[A-Z]', t) and (t != 'I' or letter_i) and not roman_v:
             article = t == 'A' and re.fullmatch(r'[a-z]\w*', raw[i + 1] if i + 1 < len(raw) else '') and nxt not in LETTER_NEXT
             if not article:

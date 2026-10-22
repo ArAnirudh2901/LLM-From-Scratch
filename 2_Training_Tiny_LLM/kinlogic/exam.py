@@ -159,8 +159,8 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
     their option, weighted by the reader's confidence. confidence: the winning option's share of the votes."""
     import math
     from .codes import with_codes
-    read = with_codes(read)   # coded questions are read exactly; the model reads the rest
     p = prepare(text)
+    read = with_codes(read, p)   # coded questions are read exactly; the model reads the rest
     got = read([p['tokens']])[0]
     readings = [(got, 0.0)] if isinstance(got, str) else [(g, 0.0) if isinstance(g, str) else (g[0], g[1]) for g in got]
     results = []

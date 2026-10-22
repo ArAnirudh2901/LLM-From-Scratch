@@ -35,6 +35,12 @@ def load_real(pattern='data/real_questions/*.jsonl'):
     return rows
 
 
+def split_of(r) -> str:
+    """'dev' (error analysis, fixes) or 'test' (locked: scores only), half each by question hash."""
+    import zlib
+    return 'dev' if zlib.crc32(re.sub(r'\s+', ' ', r['question']).strip().lower().encode()) % 2 == 0 else 'test'
+
+
 def as_text(r):
     opts = ' '.join(f'({l}) {t}' for l, t in r['options'])
     return f"{r['question']} {opts}".strip()
@@ -54,19 +60,27 @@ def correct(r, res):
 
 
 def run(read, rows):
+    from eval.real_clean import broken
     by = collections.defaultdict(lambda: [0, 0])
-    misses = []
+    sp = collections.defaultdict(lambda: [0, 0])
+    misses, oks = [], []
     for r in rows:
         res = answer(as_text(r), read)
         ok = correct(r, res)
+        oks.append(ok)
+        for k in (split_of(r), f'{split_of(r)} fair' if not broken(r) else None):
+            if k:
+                sp[k][0] += ok
+                sp[k][1] += 1
         k = by[r['site']]
         k[0] += ok; k[1] += 1
         if not ok:
-            misses.append({'site': r['site'], 'q': r['question'][:300], 'want': r.get('answer') or r.get('answer_text'),
+            misses.append({'split': split_of(r), 'site': r['site'], 'q': r['question'][:300], 'want': r.get('answer') or r.get('answer_text'),
                            'got': res.get('option') or res.get('answer'), 'facts': res.get('facts', '')})
     total = [sum(v[i] for v in by.values()) for i in range(2)]
     return {'real_acc': total[0] / max(1, total[1]), 'n': total[1],
-            'by_site': {k: f'{a}/{b}' for k, (a, b) in sorted(by.items())}}, misses
+            'splits': {k: f'{a}/{b} = {a / b:.1%}' for k, (a, b) in sorted(sp.items())},
+            'by_site': {k: f'{a}/{b}' for k, (a, b) in sorted(by.items())}, 'ok': oks}, misses
 
 
 if __name__ == '__main__':
@@ -78,10 +92,11 @@ if __name__ == '__main__':
     ap.add_argument('--ckpt', required=True)
     ap.add_argument('--cpu', action='store_true')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--limit', type=int, default=None, help='first N questions only (quick comparisons)')
     a = ap.parse_args()
     dev = get_device(force_cpu=a.cpu)
     model, vocab = load(a.ckpt, dev)
-    rows = load_real()
+    rows = load_real()[:a.limit]
     score, misses = run(lambda b: generate(model, vocab, b, dev, k=8), rows)
     print(json.dumps(score, indent=1))
     if a.out:
