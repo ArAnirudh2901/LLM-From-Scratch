@@ -1240,8 +1240,9 @@ def q_story(rng) -> dict | None:
         end = run[-1][1]
         x, y, word, side = fact_for(q, run, cur, end, side_p=0.1)
         rx, ry = q.ref(x), q.ref(y)
-        lines.append((rng.choice(STORY).format(X=rx.surface, Y=ry.surface, r=rel_phrase(word, side), his=PRON[rx.g][2]),
-                      [F(rx, word, ry, side)], [rx]))
+        tpl = rng.choice(STORY)
+        lines.append((tpl.format(X=rx.surface, Y=ry.surface, r=rel_phrase(word, side), his=PRON[rx.g][2]),
+                      [F(rx, word, ry, side)], [rx] if '{his}' in tpl else []))   # gender only when a pronoun states it
         cur = end
     for _ in range(rng.choice([0, 1, 1, 2])):
         kind = rng.random()
@@ -1256,7 +1257,7 @@ def q_story(rng) -> dict | None:
             lines.append((rng.choice(TRAVEL).format(X=n.surface, P=rng.choice(PLACES)), [], []))
     rng.shuffle(lines) if rng.random() < 0.3 else None
     for text, facts, ev in lines:
-        q.add(text, facts, evidence=ev if '{his}' else [])
+        q.add(text, facts, evidence=ev)
     ra, rb = q.ref(a), q.ref(b)
     if rng.random() < 0.5:
         ra, rb = rb, ra

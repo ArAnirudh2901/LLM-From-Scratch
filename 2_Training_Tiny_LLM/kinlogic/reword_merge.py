@@ -5,6 +5,7 @@ re-checked against its source question:
   - the facts keep the source's structure (statement parts, member/generation counts, "has N", "only"): the reading
     schema of the rewriters has none of these, so sufficiency and puzzle rewrites lose them and would teach the reader
     to drop them;
+  - no symbol junk (rewriters sometimes append code symbols);
   - every gender fact is implied by the relations, stated in the source, or cued in a sentence that names the person
     ("her mother Elizabeth"); a gender read from a name alone would teach the reader to guess genders from names.
 
@@ -27,6 +28,7 @@ from .prepare import prepare
 from .reword import accept
 
 GENDER = re.compile(r'([@#]\d+) (male|female)')
+JUNK = re.compile(r'[^\w\s\'".,?!:;()-]{4,}|(.)\1{5,}|(?:^|\s)[^\w\s(]\)\s')   # also option labels turned into symbols: "@) mother"   # rewriters sometimes append code symbols: "... to Nazia? @#×$"
 CUE = re.compile(r"\b(he|she|his|her|him|hers|himself|herself|man|woman|men|women|lady|ladies|gentleman|boy|girl|"
                  r"mr|mrs|ms|miss|male|female|sir|madam)\b", re.I)
 
@@ -70,16 +72,32 @@ def genders_supported(r, src):
     return True
 
 
+def strip_implied(r):
+    """The pool never writes a gender the relations already give ("wife" -> female); rewrites drop those too, so one
+    wording never has two readings."""
+    from eval.gender_set import gender_of
+    fs = [f.strip() for f in r['lf'].split(';')]
+    others = ' ; '.join(f for f in fs if not GENDER.fullmatch(f))
+    implied = gender_of(others, sorted({t for t in r['tokens'] if t[0] == '@'})) or {}
+    keep = [f for f in fs if not (GENDER.fullmatch(f) and str(implied.get(f.split()[0], ''))[:1].upper() == f.split()[1][0].upper())]
+    return ' ; '.join(keep)
+
+
 def check(job):
     """'kept' or why the row is dropped."""
     r, src = job
     try:
         if not (r.get('text') and r.get('tokens') and r.get('lf')) or not accept(r['lf'], r['truth'], r['tokens']):
             return 'engine answer'
+        if JUNK.search(r['text']):
+            return 'symbol junk'
         if src is None:
             return 'source not found'
         if structure(r['lf']) != structure(src['lf']):
             return 'structure lost'
+        from gender_audit import unsupported
+        if unsupported(r):   # no relation and no gender word gives it: the source story had a name-guessed gender
+            return 'gender not in text'
         return 'kept' if genders_supported(r, src) else 'gender from name'
     except Exception as e:
         return 'error ' + type(e).__name__
@@ -123,6 +141,10 @@ def main():
     with ProcessPoolExecutor() as pool:
         why = list(pool.map(check, [(r, src.get(r['source'])) for r in rows], chunksize=64))
     kept = [r for r, w in zip(rows, why) if w == 'kept']
+    with ProcessPoolExecutor() as pool:
+        lfs = list(pool.map(strip_implied, kept, chunksize=64))
+    for r, lf in zip(kept, lfs):
+        r['lf'] = lf
     dropped = collections.Counter(w for w in why if w != 'kept')
     by_kind = collections.Counter((r['kind'].removeprefix('reworded-'), w) for r, w in zip(rows, why) if w != 'kept')
     dev = [r for r in kept if is_dev(r['source'], a.dev_every)]

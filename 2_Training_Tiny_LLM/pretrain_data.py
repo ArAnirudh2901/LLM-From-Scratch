@@ -104,7 +104,7 @@ def fineweb(shards=range(1), cache='data/pretrain_cache'):
                 yield t
 
 
-def domain(src='data/dataset_v2', extra=('data/reworded.jsonl.gz',)):
+def domain(src='data/dataset_v4', extra=()):
     """Kinship text already prepared (token lists): the verified pool's questions (never the locked test) and the
     verified rewrites, files interleaved line by line so any prefix mixes every kind and depth."""
     import glob
