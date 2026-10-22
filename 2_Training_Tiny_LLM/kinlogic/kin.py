@@ -88,6 +88,11 @@ def _by(g, m, f, n):
     return m if g == 'M' else f if g == 'F' else n
 
 
+def _pre(prefix, word):
+    """'great-' + 'grand-nephew or grand-niece' -> 'great-grand-nephew or great-grand-niece' (both alternatives)."""
+    return ' or '.join(prefix + w for w in word.split(' or '))
+
+
 ORDINAL = ['', '', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh']
 REMOVED = {1: 'once', 2: 'twice', 3: 'thrice'}
 
@@ -155,20 +160,20 @@ def name_moves(moves) -> dict:
                 word = 'self'
             elif d == 0:
                 word = _by(g_b, 'father', 'mother', 'parent') if u == 1 else \
-                    gr(u - 2) + _by(g_b, 'grandfather', 'grandmother', 'grandparent')
+                    _pre(gr(u - 2), _by(g_b, 'grandfather', 'grandmother', 'grandparent'))
                 sided = u >= 2
             elif u == 0:
                 word = _by(g_b, 'son', 'daughter', 'child') if d == 1 else \
-                    gr(d - 2) + _by(g_b, 'grandson', 'granddaughter', 'grandchild')
+                    _pre(gr(d - 2), _by(g_b, 'grandson', 'granddaughter', 'grandchild'))
             elif u == 1 and d == 1:
                 word = _by(g_b, 'brother', 'sister', 'sibling')
             elif d == 1:
                 word = _by(g_b, 'uncle', 'aunt', 'uncle or aunt') if u == 2 else \
-                    gr(u - 3) + _by(g_b, 'great-uncle', 'great-aunt', 'great-uncle or great-aunt')
+                    _pre(gr(u - 3), _by(g_b, 'great-uncle', 'great-aunt', 'great-uncle or great-aunt'))
                 sided = True
             elif u == 1:
                 word = _by(g_b, 'nephew', 'niece', 'nephew or niece') if d == 2 else \
-                    gr(d - 3) + _by(g_b, 'grand-nephew', 'grand-niece', 'grand-nephew or grand-niece')
+                    _pre(gr(d - 3), _by(g_b, 'grand-nephew', 'grand-niece', 'grand-nephew or grand-niece'))
             elif u == d and u <= 12:
                 word = 'cousin' if u == 2 else f'{ORDINAL[u - 1]}-cousin'
                 sided = True
