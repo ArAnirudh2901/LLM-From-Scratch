@@ -258,8 +258,10 @@ def main():
 
     ck = torch.load(latest, map_location='cpu', weights_only=False) if a.resume and os.path.exists(latest) else None
     sched = (ck or {}).get('sched') or {'decay_start': None, 'decay_len': None, 'flat': 0}
-    vocab = Vocab(ck['vocab']) if ck else build_vocab(extra=a.reworded)
-    cfg = ck['config'] if ck else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': a.n_layer, 'n_head': 6,
+    init = torch.load(a.init, map_location='cpu', weights_only=False) if not ck and a.init and os.path.exists(a.init) else None
+    pre = init if init and init.get('merges') else None   # a pretrained model (pretrain_reader.py) brings its vocabulary and shape
+    vocab = Vocab.from_ck(ck) if ck else Vocab.from_ck(pre) if pre else build_vocab(extra=a.reworded)
+    cfg = ck['config'] if ck else {**pre['config'], 'dropout': a.dropout, 'block_size': max(pre['config']['block_size'], a.block)} if pre else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': a.n_layer, 'n_head': 6,
                                    'n_embd': 384, 'dropout': a.dropout, **({'arch': 'v10'} if a.arch == 'v10' else {})}
     model = make_model(cfg).to(device)
     if ck:
@@ -340,7 +342,7 @@ def main():
         """'model' holds the weights to use (averaged when EMA is on); a resumable checkpoint also keeps the raw
         weights and the optimizer."""
         tmp = path + '.tmp'
-        ck_ = {'model': (ema or model).state_dict(), 'config': cfg, 'vocab': vocab.itos, 'step': step, 'best': best,
+        ck_ = {'model': (ema or model).state_dict(), 'config': cfg, 'vocab': vocab.itos, 'merges': vocab.merges, 'step': step, 'best': best,
                'format': 'reader-v10' if cfg.get('arch') == 'v10' else 'reader-v9', 'meta': meta, 'sched': sched,
                **(extra or {})}
         if resumable:

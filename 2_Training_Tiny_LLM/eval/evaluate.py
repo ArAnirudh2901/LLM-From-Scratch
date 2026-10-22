@@ -33,7 +33,7 @@ def load(ckpt, device):
     model = make_model(ck['config']).to(device)
     model.load_state_dict(ck['model'])
     model.eval()
-    return model, Vocab(ck['vocab'])
+    return model, Vocab.from_ck(ck)
 
 
 def first(lf, people=()):

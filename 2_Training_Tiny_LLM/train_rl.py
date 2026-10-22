@@ -81,7 +81,7 @@ def main():
     device = get_device()
     rng = random.Random(a.seed)
     ck = torch.load(a.init, map_location='cpu', weights_only=False)
-    vocab, cfg = Vocab(ck['vocab']), ck['config']
+    vocab, cfg = Vocab.from_ck(ck), ck['config']
     policy = make_model(cfg).to(device)
     policy.load_state_dict(ck['model'])   # the averaged (EMA) weights when the run kept them
     ref = copy.deepcopy(policy).eval()

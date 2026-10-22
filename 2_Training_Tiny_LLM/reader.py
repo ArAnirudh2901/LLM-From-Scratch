@@ -21,13 +21,36 @@ NEWS = [f'#{i}' for i in range(1, N_NEW + 1)]
 
 
 class Vocab:
-    def __init__(self, itos: list[str]):
+    """Token ids. With `merges` (subword.py) a word outside the vocabulary becomes its sub-word pieces instead of
+    <unk>; placeholders, the fact language and known words stay single tokens."""
+
+    def __init__(self, itos: list[str], merges=None):
         self.itos = itos
         self.stoi = {t: i for i, t in enumerate(itos)}
         self.unk = self.stoi['<unk>']
+        self.merges = [tuple(m) for m in merges] if merges else None
+        self._rank = None
+        self._cache = {}
+
+    @classmethod
+    def from_ck(cls, ck):
+        return cls(ck['vocab'], ck.get('merges'))
+
+    def word(self, t) -> list[int]:
+        i = self.stoi.get(t)
+        if i is not None or not self.merges or t[0] in '@#<':
+            return [self.unk if i is None else i]
+        got = self._cache.get(t)
+        if got is None:
+            from subword import pieces, ranks
+            self._rank = self._rank or ranks(self.merges)
+            got = self._cache[t] = [self.stoi.get(p, self.unk) for p in pieces(t, self._rank)]
+        return got
 
     def encode(self, toks):
-        return [self.stoi.get(t, self.unk) for t in toks]
+        if not self.merges:
+            return [self.stoi.get(t, self.unk) for t in toks]
+        return [i for t in toks for i in self.word(t)]
 
     def __len__(self):
         return len(self.itos)
