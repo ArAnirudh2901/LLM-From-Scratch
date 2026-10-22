@@ -102,7 +102,7 @@ if __name__ == '__main__':
     from eval.check_authored import check
     ap = argparse.ArgumentParser()
     ap.add_argument('--ckpt', default=None)
-    ap.add_argument('--beam', type=int, default=4)
+    ap.add_argument('--beam', type=int, default=8)
     a = ap.parse_args()
     check(F)   # gold facts must give every expected option before the model is scored
     if a.ckpt:

@@ -82,7 +82,7 @@ if __name__ == '__main__':
     dev = get_device(force_cpu=a.cpu)
     model, vocab = load(a.ckpt, dev)
     rows = load_real()
-    score, misses = run(lambda b: generate(model, vocab, b, dev, k=4), rows)
+    score, misses = run(lambda b: generate(model, vocab, b, dev, k=8), rows)
     print(json.dumps(score, indent=1))
     if a.out:
         json.dump({'score': score, 'misses': misses}, open(a.out, 'w'), indent=1)

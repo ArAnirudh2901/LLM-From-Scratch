@@ -158,7 +158,7 @@ def main():
     ap.add_argument('--ckpt', default='runs/reader-v9/best.pt')
     ap.add_argument('--sets', default='exam,authored,fresh,gender,deep,clutrr,riddle,generated')
     ap.add_argument('--out', default=None, help='write the results as JSON here')
-    ap.add_argument('--beam', type=int, default=4, help='readings tried per exam question (best first)')
+    ap.add_argument('--beam', type=int, default=8, help='readings tried per exam question (best first); 8 beat 4 by 4 exam questions, 16 adds little')
     a = ap.parse_args()
     device = get_device()
     model, vocab = load(a.ckpt, device)

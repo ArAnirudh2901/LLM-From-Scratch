@@ -112,7 +112,7 @@ if __name__ == '__main__':
         from train import get_device
         dev = get_device()
         model, vocab = load(a.ckpt, dev)
-        read = lambda b: generate(model, vocab, b, dev, k=4)
+        read = lambda b: generate(model, vocab, b, dev, k=8)
         by, wrong = collections.defaultdict(lambda: [0, 0]), []
         pg = collections.Counter()
         for it in G:
