@@ -59,10 +59,10 @@ def _post(url, body, headers, timeout=90):
         return json.loads(r.read())
 
 
-def call(prompt: str, provider: str, temperature: float = 0.9, json_out: bool = False) -> str:
+def call(prompt: str, provider: str, temperature: float = 0.9, json_out: bool = False, model: str | None = None) -> str:
     if provider == 'gemini':
         key = os.environ['GEMINI_API_KEY']
-        model = os.environ.get('REWORD_GEMINI_MODEL', 'gemini-3.5-flash-lite')   # ~1 s a call; 3.x flash thinks for ~30 s
+        model = model or os.environ.get('REWORD_GEMINI_MODEL', 'gemini-3.5-flash-lite')   # ~1 s a call; 3.x flash thinks for ~30 s
         cfg = {'temperature': temperature, 'thinkingConfig': {'thinkingLevel': 'minimal'},
                **({'responseMimeType': 'application/json'} if json_out else {})}
         r = _post(f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
@@ -139,7 +139,8 @@ def reword_one(ex: dict, provider: str) -> dict | None:
     if not new or any(n.lower() not in new.lower() for n in names) or re.search(r'\\[a-z]+|\$[A-Za-z]|\*\*|^\s*[-*] ', new, re.M):
         return None
     p = prepare(new)
-    raw = call(EXTRACT.format(q=new, words=', '.join(sorted(KIN))), provider, temperature=0.0, json_out=True)   # a faithful reading
+    raw = call(EXTRACT.format(q=new, words=', '.join(sorted(KIN))), provider, temperature=0.0, json_out=True,   # a faithful reading
+               model=os.environ.get('REWORD_EXTRACT_MODEL', 'gemini-flash-lite-latest') if provider == 'gemini' else None)   # its own free quota
     m = re.search(r'\{.*\}', raw, re.S)
     if not m:
         return None
@@ -159,7 +160,7 @@ def main():
     ap.add_argument('--out', default='data/reworded.jsonl.gz')
     ap.add_argument('--n', type=int, default=2000)
     ap.add_argument('--provider', default='gemini' if os.environ.get('GEMINI_API_KEY') else 'anthropic')
-    ap.add_argument('--pause', type=float, default=9.0, help='seconds between questions (two calls each; free-tier rate limits)')
+    ap.add_argument('--pause', type=float, default=4.0, help='seconds between questions (one call per model each; free-tier rate limits)')
     a = ap.parse_args()
     files = [f for f in sorted(glob.glob(f'{a.src}/**/*.jsonl.gz', recursive=True)) if '/test/' not in f]   # never the locked test
     rng = random.Random(0)
@@ -171,10 +172,14 @@ def main():
     rows = [r for r in rows if isinstance(r.get('truth'), str) and "'s " not in r['truth'] and r.get('names')]
     rng.shuffle(rows)
     done = set()
-    if os.path.exists(a.out):
-        done = {json.loads(l)['source'] for l in gzip.open(a.out, 'rt')}
+    if os.path.exists(a.out):   # a killed run can leave a truncated last block: keep what reads
+        try:
+            for l in gzip.open(a.out, 'rt'):
+                done.add(json.loads(l)['source'])
+        except (EOFError, OSError, ValueError):
+            pass
     kept = tried = 0
-    with gzip.open(a.out, 'at') as f:
+    if True:   # each kept row is appended as its own complete gzip block: a killed run never damages earlier rows
         for ex in rows:
             if kept + len(done) >= a.n:
                 break
@@ -191,8 +196,8 @@ def main():
                 continue
             main.waits = 0
             if got:
-                f.write(json.dumps(got, ensure_ascii=False) + '\n')
-                f.flush()
+                with gzip.open(a.out, 'at') as f:
+                    f.write(json.dumps(got, ensure_ascii=False) + '\n')
                 kept += 1
             if tried % 20 == 0:
                 print(f'{tried} tried, {kept} kept ({kept / tried:.0%})', flush=True)
