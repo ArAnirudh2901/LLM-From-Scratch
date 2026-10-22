@@ -14,7 +14,7 @@ def test_model_shapes_and_padding_invariance():
     x = batch_ids(['asha', 'venkataramanan'], 'cpu')
     one = m(batch_ids(['asha'], 'cpu'))
     assert m(x).shape == (2,) and torch.allclose(m(x)[0], one[0], atol=1e-5)
-    assert sum(p.numel() for p in m.parameters()) < 150_000
+    assert sum(p.numel() for p in m.parameters()) < 300_000
 
 
 def test_thresholds_respect_the_wrong_budget():

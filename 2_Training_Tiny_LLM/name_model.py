@@ -1,6 +1,6 @@
 """Name -> gender model: a small character CNN that reads a first name's spelling and gives P(female), so names never
-seen in any list still get a gender (suffixes like -preet, -amma, -appa, -bhai/-ben, spelling variants). ~95k
-parameters, exact fp32 (~0.4 MB): microseconds per name on any CPU, easy to run in the browser.
+seen in any list still get a gender (suffixes like -preet, -amma, -appa, -bhai/-ben, spelling variants). ~210k
+parameters, exact fp32 (~0.8 MB): microseconds per name on any CPU, easy to run in the browser.
 
 It decides only when sure: male if p <= t_male, female if p >= t_female, else the gender stays open (a wrong gender
 flips an answer; an open one does not). Thresholds are picked on validation names so wrong genders stay <= `--max_wrong`.
@@ -36,7 +36,7 @@ def encode(name: str) -> list[int]:
 
 
 class NameModel(nn.Module):
-    def __init__(self, d: int = 32, ch: int = 64, widths=(2, 3, 4, 5), hidden: int = 128):
+    def __init__(self, d: int = 32, ch: int = 96, widths=(2, 3, 4, 5), hidden: int = 192):
         super().__init__()
         self.cfg = dict(d=d, ch=ch, widths=list(widths), hidden=hidden)
         self.emb = nn.Embedding(len(CHARS) + 1, d, padding_idx=0)
@@ -127,7 +127,7 @@ def train(a):
     dev = torch.device(a.device)
     rows = load_table(a.data)
     tr = rows['train']
-    w = torch.tensor([math.log1p(s) for _, _, s in tr])   # frequent names count more, rare ones still seen
+    w = torch.tensor([min(s, 5000) ** 0.5 for _, _, s in tr])   # well-evidenced names dominate; 2.4M weak WGND entries are noisy
     X = torch.zeros(len(tr), MAX_LEN, dtype=torch.uint8)   # encoded once
     for k, (n, _, _) in enumerate(tr):
         e = encode(n)
@@ -185,7 +185,7 @@ if __name__ == '__main__':
     ap.add_argument('--data', default='data/names/name_gender.tsv.gz')
     ap.add_argument('--out', default='runs/names-v1')
     ap.add_argument('--ckpt', default=None)
-    ap.add_argument('--epochs', type=int, default=4)
+    ap.add_argument('--epochs', type=int, default=12)
     ap.add_argument('--batch', type=int, default=1024)
     ap.add_argument('--lr', type=float, default=3e-3)
     ap.add_argument('--max_wrong', type=float, default=0.01)
