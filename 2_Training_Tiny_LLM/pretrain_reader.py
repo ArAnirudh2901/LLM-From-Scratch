@@ -50,9 +50,9 @@ def main():
     ap.add_argument('--vocab', default='data/subword_vocab.json')
     ap.add_argument('--out', required=True)
     ap.add_argument('--tokens', type=float, default=4e8, help='training tokens (budget)')
-    ap.add_argument('--n_layer', type=int, default=8)
-    ap.add_argument('--n_embd', type=int, default=512)
-    ap.add_argument('--n_head', type=int, default=8)
+    ap.add_argument('--n_layer', type=int, default=16, help='deep and thin beats wide and shallow below 1B (MobileLLM, 2024)')
+    ap.add_argument('--n_embd', type=int, default=384)
+    ap.add_argument('--n_head', type=int, default=6)
     ap.add_argument('--block', type=int, default=512)
     ap.add_argument('--batch', type=int, default=32)
     ap.add_argument('--lr', type=float, default=6e-4)
@@ -79,7 +79,10 @@ def main():
         model.load_state_dict(ck['model'])
     steps = int(a.tokens // (a.batch * a.block))
     decay_from = int(0.8 * steps)
-    opt = torch.optim.AdamW(model.parameters(), lr=a.lr, betas=(0.9, 0.95), weight_decay=a.weight_decay, fused=dev.type == 'cuda')
+    decay = [p for n, p in model.named_parameters() if p.dim() >= 2 and 'emb' not in n]   # no decay on embeddings and norms (OLMo 2, SmolLM3)
+    rest = [p for n, p in model.named_parameters() if not (p.dim() >= 2 and 'emb' not in n)]
+    opt = torch.optim.AdamW([{'params': decay, 'weight_decay': a.weight_decay}, {'params': rest, 'weight_decay': 0.0}],
+                            lr=a.lr, betas=(0.9, 0.95), fused=dev.type == 'cuda')
     amp = a.amp and dev.type == 'cuda'
     scaler = torch.amp.GradScaler('cuda', enabled=amp)
     step = 0
