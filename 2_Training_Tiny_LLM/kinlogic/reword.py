@@ -36,15 +36,19 @@ REWRITE = """Rewrite this blood-relation reasoning question as it might appear i
 - keep every person's name or letter exactly as written,
 - keep every family relationship and every stated gender exactly (no new facts, none dropped),
 - keep the final question asking about the same two people,
-- do not add answer options or an answer.
+- do not add answer options or an answer,
+- plain text only: no LaTeX, markdown or bullet points; copy code symbols (like $, #, @, ×) exactly as written.
 Output only the rewritten question.
 
 Question: {q}"""
 
-EXTRACT = """Read this blood-relation question and list its facts as JSON, nothing else:
-{{"facts": [["X", "relation", "Y"], ...], "genders": [["X", "male" or "female"], ...], "ask": ["A", "B"]}}
-A fact ["X", "relation", "Y"] means "Y is X's relation". Use only these relation words: {words}.
-"ask" ["A", "B"] means the question asks how B is related to A. Use the names exactly as written.
+EXTRACT = """List the family facts of this question as JSON, nothing else:
+{{"facts": [{{"person": "X", "is_the": "relation", "of": "Y"}}, ...], "genders": [{{"person": "X", "gender": "male" or "female"}}, ...],
+ "ask": {{"how_is": "B", "related_to": "A"}}}}
+Write each fact exactly as the text states it: "X is the son of Y" -> {{"person": "X", "is_the": "son", "of": "Y"}};
+"Y's daughter is X" -> {{"person": "X", "is_the": "daughter", "of": "Y"}}. Keep the exact relation word the text uses
+(son, not child). List a gender only when the text states it (he/she, his/her, a man, a woman). Relation words allowed:
+{words}. Use the names exactly as written.
 
 Question: {q}"""
 
@@ -55,18 +59,20 @@ def _post(url, body, headers, timeout=90):
         return json.loads(r.read())
 
 
-def call(prompt: str, provider: str) -> str:
+def call(prompt: str, provider: str, temperature: float = 0.9, json_out: bool = False) -> str:
     if provider == 'gemini':
         key = os.environ['GEMINI_API_KEY']
-        model = os.environ.get('REWORD_GEMINI_MODEL', 'gemini-2.5-flash')
+        model = os.environ.get('REWORD_GEMINI_MODEL', 'gemini-3.5-flash-lite')   # ~1 s a call; 3.x flash thinks for ~30 s
+        cfg = {'temperature': temperature, 'thinkingConfig': {'thinkingLevel': 'minimal'},
+               **({'responseMimeType': 'application/json'} if json_out else {})}
         r = _post(f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
-                  {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'temperature': 0.9}},
+                  {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': cfg},
                   {'x-goog-api-key': key})
         return r['candidates'][0]['content']['parts'][0]['text'].strip()
     key = os.environ['ANTHROPIC_API_KEY']
     model = os.environ.get('REWORD_CLAUDE_MODEL', 'claude-haiku-5-5')
     r = _post('https://api.anthropic.com/v1/messages',
-              {'model': model, 'max_tokens': 800, 'messages': [{'role': 'user', 'content': prompt}]},
+              {'model': model, 'max_tokens': 800, 'temperature': temperature, 'messages': [{'role': 'user', 'content': prompt}]},
               {'x-api-key': key, 'anthropic-version': '2023-06-01'})
     return r['content'][0]['text'].strip()
 
@@ -76,19 +82,21 @@ def to_facts(extracted: dict, ents: list[dict]) -> str | None:
     by = {e['text'].lower(): e['id'] for e in ents}
     place = lambda n: by.get(str(n).strip().lower())
     out = []
-    for x, r, y in extracted.get('facts', []):
-        r = str(r).strip().lower().replace(' ', '-') if str(r).strip().lower() not in KIN else str(r).strip().lower()
+    for f in extracted.get('facts', []):   # "person is the R of Y" -> fact "Y R person"
+        x, y, r = f.get('person'), f.get('of'), str(f.get('is_the', '')).strip().lower()
+        r = r if r in KIN else r.replace(' ', '-')
         if r not in KIN or place(x) is None or place(y) is None:
             return None
-        out.append(f'{place(x)} {r} {place(y)}')
-    for x, g in extracted.get('genders', []):
-        if place(x) is None or g not in ('male', 'female'):
+        out.append(f'{place(y)} {r} {place(x)}')
+    for g in extracted.get('genders', []):
+        if place(g.get('person')) is None or g.get('gender') not in ('male', 'female'):
             return None
-        out.append(f'{place(x)} {g}')
-    a, b = extracted.get('ask', [None, None])
-    if place(a) is None or place(b) is None:
+        out.append(f"{place(g['person'])} {g['gender']}")
+    ask = extracted.get('ask') or {}
+    b, a = place(ask.get('how_is')), place(ask.get('related_to'))
+    if a is None or b is None:
         return None
-    out.append(f'ask {place(a)} {place(b)}')
+    out.append(f'ask {a} {b}')
     return ' ; '.join(out)
 
 
@@ -128,10 +136,10 @@ def same_meaning(original: dict, lf: str, ents) -> bool:
 def reword_one(ex: dict, provider: str) -> dict | None:
     names = [e['text'] for e in prepare(ex['text'])['ents'] if e['kind'] in ('name', 'letter')]
     new = call(REWRITE.format(q=ex['text']), provider)
-    if not new or any(n not in new for n in names):
+    if not new or any(n.lower() not in new.lower() for n in names) or re.search(r'\\[a-z]+|\$[A-Za-z]|\*\*|^\s*[-*] ', new, re.M):
         return None
     p = prepare(new)
-    raw = call(EXTRACT.format(q=new, words=', '.join(sorted(KIN))), provider)
+    raw = call(EXTRACT.format(q=new, words=', '.join(sorted(KIN))), provider, temperature=0.0, json_out=True)   # a faithful reading
     m = re.search(r'\{.*\}', raw, re.S)
     if not m:
         return None
@@ -147,15 +155,21 @@ def reword_one(ex: dict, provider: str) -> dict | None:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--src', default='data/dataset/deep')
+    ap.add_argument('--src', default='data/dataset_v2')
     ap.add_argument('--out', default='data/reworded.jsonl.gz')
     ap.add_argument('--n', type=int, default=2000)
     ap.add_argument('--provider', default='gemini' if os.environ.get('GEMINI_API_KEY') else 'anthropic')
-    ap.add_argument('--pause', type=float, default=4.0, help='seconds between questions (free-tier rate limits)')
+    ap.add_argument('--pause', type=float, default=9.0, help='seconds between questions (two calls each; free-tier rate limits)')
     a = ap.parse_args()
-    rows = [json.loads(l) for f in sorted(glob.glob(f'{a.src}/**/*.jsonl.gz', recursive=True)) for l in gzip.open(f, 'rt')]
+    files = [f for f in sorted(glob.glob(f'{a.src}/**/*.jsonl.gz', recursive=True)) if '/test/' not in f]   # never the locked test
+    rng = random.Random(0)
+    per = max(5, 4 * a.n // max(1, len(files)))   # a sample from every file (all kinds and depths), parsed lazily: the set is 1.36M
+    rows = []
+    for f in files:
+        lines = gzip.open(f, 'rt').readlines()
+        rows += [json.loads(l) for l in rng.sample(lines, min(per, len(lines)))]
     rows = [r for r in rows if isinstance(r.get('truth'), str) and "'s " not in r['truth'] and r.get('names')]
-    random.Random(0).shuffle(rows)
+    rng.shuffle(rows)
     done = set()
     if os.path.exists(a.out):
         done = {json.loads(l)['source'] for l in gzip.open(a.out, 'rt')}
@@ -169,10 +183,13 @@ def main():
             tried += 1
             try:
                 got = reword_one(ex, a.provider)
-            except Exception as e:   # rate limit or network: wait and go on
+            except Exception as e:   # rate limit or network: back off and go on
+                waits = getattr(main, 'waits', 0) + 1
+                main.waits = waits
                 print('call failed:', type(e).__name__, str(e)[:120], flush=True)
-                time.sleep(30)
+                time.sleep(min(300, 15 * waits))
                 continue
+            main.waits = 0
             if got:
                 f.write(json.dumps(got, ensure_ascii=False) + '\n')
                 f.flush()

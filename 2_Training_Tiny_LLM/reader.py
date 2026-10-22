@@ -33,8 +33,10 @@ class Vocab:
         return len(self.itos)
 
 
-def build_vocab(n_generated: int = 100000, clutrr: str = 'data/clutrr_facts/train.jsonl.gz', seed: int = 0) -> Vocab:
-    """Every word the generator writes, CLUTRR words seen twice, the fact language and placeholders."""
+def build_vocab(n_generated: int = 100000, clutrr: str = 'data/clutrr_facts/train.jsonl.gz', seed: int = 0,
+                extra: str | None = None) -> Vocab:
+    """Every word the generator writes, CLUTRR words seen twice, words of `extra` (reworded questions) seen twice,
+    the fact language and placeholders."""
     from kinlogic import generate
     from kinlogic.prepare import LEXICON
     rng = random.Random(seed)
@@ -43,9 +45,10 @@ def build_vocab(n_generated: int = 100000, clutrr: str = 'data/clutrr_facts/trai
         ex = generate.sample(rng)
         gen_words.update(t for t in ex['tokens'] if t[0] not in '@#')
     counts = Counter()
-    if Path(clutrr).exists():
-        for line in gzip.open(clutrr, 'rt'):
-            counts.update(t for t in json.loads(line)['tokens'] if t[0] not in '@#')
+    for path in (clutrr, extra):
+        if path and Path(path).exists():
+            for line in gzip.open(path, 'rt'):
+                counts.update(t for t in json.loads(line)['tokens'] if t[0] not in '@#')
     words = gen_words | {w for w, c in counts.items() if c >= 2} | LEXICON
     fixed = SPECIALS + ENTS + NEWS + [t for t in vocabulary() if t != ';']
     return Vocab(fixed + sorted(words - set(fixed)))

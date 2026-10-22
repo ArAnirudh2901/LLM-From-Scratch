@@ -256,7 +256,7 @@ def main():
 
     ck = torch.load(latest, map_location='cpu', weights_only=False) if a.resume and os.path.exists(latest) else None
     sched = (ck or {}).get('sched') or {'decay_start': None, 'decay_len': None, 'flat': 0}
-    vocab = Vocab(ck['vocab']) if ck else build_vocab()
+    vocab = Vocab(ck['vocab']) if ck else build_vocab(extra=a.reworded)
     cfg = ck['config'] if ck else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': a.n_layer, 'n_head': 6,
                                    'n_embd': 384, 'dropout': a.dropout, **({'arch': 'v10'} if a.arch == 'v10' else {})}
     model = make_model(cfg).to(device)
