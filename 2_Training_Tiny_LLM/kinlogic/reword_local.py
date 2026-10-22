@@ -21,7 +21,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 from .kin import KIN
 from .prepare import prepare
-from .reword import EXTRACT, REWRITE, accept, clean, same_meaning, to_facts
+from .reword import EXTRACT, REWRITE, accept, clean, needed, same_meaning, to_facts
 
 MODEL = 'Qwen/Qwen3-4B-Instruct-2507'
 BAD = re.compile(r'\\[a-z]+|\$[A-Za-z]|\*\*|^\s*[-*] ', re.M)
@@ -159,7 +159,7 @@ def main():
             news = [clean(t) for t in be.chat([REWRITE.format(q=ex['text']) for ex in batch], 0.9, 300)]
             ok, why, eg = [], {}, {}
             for ex, new in zip(batch, news):
-                names = [e['text'] for e in prepare(ex['text'])['ents'] if e['kind'] in ('name', 'letter')]
+                names = needed(ex)
                 r = 'latex/markdown' if not new or BAD.search(new) else 'names lost' if not all(nm.lower() in new.lower() for nm in names) else None
                 if r:
                     why[r] = why.get(r, 0) + 1

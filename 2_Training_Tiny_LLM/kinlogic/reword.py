@@ -85,10 +85,34 @@ def clean(text: str) -> str:
     return t.strip().strip('"“”').strip()
 
 
+ARTICLES = re.compile(r'^(?:the|a|an)\s+')
+
+
+def _head(text: str) -> str:
+    """'the man in the photograph' -> 'man'; 'a lady' -> 'lady'."""
+    return (ARTICLES.sub('', str(text).strip().lower()).split() or [''])[0]
+
+
+def placer(ents):
+    """name -> placeholder: exact text, else a description's head noun when it picks out one entity."""
+    by = {e['text'].lower(): e['id'] for e in ents}
+    heads = {}
+    for e in ents:
+        if e['kind'] == 'desc':
+            heads.setdefault(_head(e['text']), []).append(e['id'])
+    return lambda n: by.get(str(n).strip().lower()) or (heads.get(_head(n), [None, None]) + [None])[0] \
+        if len(heads.get(_head(n), [])) <= 1 else None
+
+
+def needed(ex) -> list[str]:
+    """Names and letters of the people in the original's facts (filler sentences may be dropped by a rewrite)."""
+    ids = set(re.findall(r'@\d+', ex['lf']))
+    return [e['text'] for e in prepare(ex['text'])['ents'] if e['id'] in ids and e['kind'] in ('name', 'letter')]
+
+
 def to_facts(extracted: dict, ents: list[dict]) -> str | None:
     """The extraction as fact language, names placed the way prepare() numbered them; None if anything is off."""
-    by = {e['text'].lower(): e['id'] for e in ents}
-    place = lambda n: by.get(str(n).strip().lower())
+    place = placer(ents)
     out = []
     for f in extracted.get('facts', []):   # "person is the R of Y" -> fact "Y R person"
         x, y, r = f.get('person'), f.get('of'), str(f.get('is_the', '')).strip().lower()
@@ -132,8 +156,14 @@ def entails(lf_a: str, lf_b: str, people) -> bool:
 
 def same_meaning(original: dict, lf: str, ents) -> bool:
     """The extraction and the original facts entail each other (names matched across the two texts)."""
-    by = {e['text'].lower(): e['id'] for e in ents}
-    move = {pid: by.get(name.lower()) for pid, name in (original.get('names') or {}).items()}
+    place = placer(ents)
+    ids = set(re.findall(r'@\d+', original['lf']))
+    names = original.get('names') or {}
+    move = {pid: place(names.get(pid, '')) for pid in ids}
+    new_desc = [e['id'] for e in ents if e['kind'] == 'desc']
+    old_desc = [pid for pid in ids if move[pid] is None and pid in names and not names[pid][:1].isupper()]
+    if len(old_desc) == 1 and len(new_desc) == 1:   # one description on each side ("a man" / "the gentleman")
+        move[old_desc[0]] = new_desc[0]
     if not move or None in move.values():
         return False
     orig = ' '.join(move.get(t, t) for t in original['lf'].split())
@@ -142,7 +172,7 @@ def same_meaning(original: dict, lf: str, ents) -> bool:
 
 
 def reword_one(ex: dict, provider: str) -> dict | None:
-    names = [e['text'] for e in prepare(ex['text'])['ents'] if e['kind'] in ('name', 'letter')]
+    names = needed(ex)
     new = clean(call(REWRITE.format(q=ex['text']), provider))
     if not new or any(n.lower() not in new.lower() for n in names) or re.search(r'\\[a-z]+|\$[A-Za-z]|\*\*|^\s*[-*] ', new, re.M):
         return None
