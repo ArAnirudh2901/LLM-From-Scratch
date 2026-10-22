@@ -248,6 +248,8 @@ def main():
     ap.add_argument('--ramp_steps', type=int, default=20000, help='steps by which every depth (up to 12) is in the mix')
     ap.add_argument('--reworded', default='data/reworded.jsonl.gz', help='frontier-model rewrites (kinlogic/reword.py), if present')
     ap.add_argument('--p_reworded', type=float, default=0.15)
+    ap.add_argument('--reworded_dev', default='data/reworded_dev.jsonl.gz', help='held-out rewrites (kinlogic/reword_merge.py): scored each evaluation')
+    ap.add_argument('--w_reworded', type=float, default=0.4, help="weight of the held-out rewrites in the pick score (closest to real phrasing)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     device = get_device(force_cpu=a.cpu)
@@ -293,12 +295,13 @@ def main():
     from eval.authored_set import examples as authored_examples
     authored = authored_examples(('train',)) if a.p_authored > 0 else []
     pool = load_pool(a.pool) if a.pool and os.path.isdir(a.pool) else None
+    rw_dev = load_jsonl(a.reworded_dev) if a.reworded_dev and os.path.exists(a.reworded_dev) else []
     if pool and a.reworded and os.path.exists(a.reworded):
         pool['reworded'], pool['p_reworded'] = load_jsonl(a.reworded), a.p_reworded
         print(f"reworded: {len(pool['reworded'])} verified rewrites at {a.p_reworded:.0%}", flush=True)
     if pool:
         import hashlib
-        sig = hashlib.sha1(''.join(r['lf'] for r in pool['dev'][:600]).encode()).hexdigest()[:12]
+        sig = hashlib.sha1(''.join(r['lf'] for r in pool['dev'][:600] + rw_dev).encode()).hexdigest()[:12]
         if ck is not None and sched.get('dev_sig') != sig:   # scores on another dev set (or an unsigned one) are not comparable
             print(f"deep dev set changed ({sched.get('dev_sig')} -> {sig}): best score and patience reset", flush=True)
             best, sched['flat'] = -1.0, 0
@@ -387,6 +390,10 @@ def main():
                 rd, preds = evaluate(judge, vocab, device, rows)
                 score += 0.2 * rd['answer']
                 line += f" | deep dev answer {rd['answer']:.3f} by depth {by_depth(rows, preds)}"
+            if rw_dev:
+                rr, _ = evaluate(judge, vocab, device, rw_dev)
+                score += a.w_reworded * rr['answer']
+                line += f" | reworded dev answer {rr['answer']:.3f}"
             print(line + f" | by kind {r['kinds']}", flush=True)
             if score > best + a.min_delta:
                 sched['flat'] = 0
