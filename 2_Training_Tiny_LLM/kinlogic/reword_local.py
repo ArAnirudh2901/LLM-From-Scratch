@@ -64,7 +64,7 @@ class Backend:
         return out
 
 
-def sample_sources(src, n, seed=0):
+def sample_sources(src, n, seed=0, max_depth=8):
     """Rows from every file (all kinds and depths) except the locked test, parsed lazily."""
     files = [f for f in sorted(glob.glob(f'{src}/**/*.jsonl.gz', recursive=True)) if '/test/' not in f]
     rng = random.Random(seed)
@@ -73,7 +73,8 @@ def sample_sources(src, n, seed=0):
     for f in files:
         lines = gzip.open(f, 'rt').readlines()
         rows += [json.loads(l) for l in rng.sample(lines, min(per, len(lines)))]
-    rows = [r for r in rows if isinstance(r.get('truth'), str) and "'s " not in r['truth'] and r.get('names')]
+    rows = [r for r in rows if isinstance(r.get('truth'), str) and "'s " not in r['truth'] and r.get('names')
+            and (r.get('depth') or 0) <= max_depth]   # a 4B reader misreads very long chains
     rng.shuffle(rows)
     return rows
 
@@ -123,7 +124,7 @@ def main():
     ap.add_argument('--workers', type=int, default=max(1, (os.cpu_count() or 2)))
     a = ap.parse_args()
     done = done_sources(a.out)
-    rows = [r for r in sample_sources(a.src, a.n) if hashlib.sha1(r['text'].encode()).hexdigest() not in done]
+    rows = [r for r in sample_sources(a.src, a.n, seed=int(time.time())) if hashlib.sha1(r['text'].encode()).hexdigest() not in done]   # new sample per run
     be = Backend(a.model)
     kept, tried, t0 = len(done), 0, time.time()
     words = ', '.join(sorted(KIN))
@@ -156,7 +157,7 @@ def main():
             if kept >= a.n:
                 break
             batch = rows[i:i + a.chunk]
-            news = [clean(t) for t in be.chat([REWRITE.format(q=ex['text']) for ex in batch], 0.9, 300)]
+            news = [clean(t) for t in be.chat([REWRITE.format(q=ex['text']) for ex in batch], 0.7, 300)]
             ok, why, eg = [], {}, {}
             for ex, new in zip(batch, news):
                 names = needed(ex)

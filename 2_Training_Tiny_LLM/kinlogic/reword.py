@@ -33,7 +33,7 @@ from .prepare import prepare
 
 REWRITE = """Rewrite this blood-relation reasoning question as it might appear in a different competitive exam
 (bank PO, SSC, CAT, UPSC CSAT). Change the wording and sentence structure freely, but:
-- keep every person's name or letter exactly as written,
+- keep every person's name or letter exactly as written: each one must appear in your version,
 - keep every family relationship and every stated gender exactly (no new facts, none dropped; keep sentences like
   "X is a woman" or pronouns that show a gender),
 - keep the final question asking about the same two people,
@@ -48,8 +48,14 @@ EXTRACT = """List the family facts of this question as JSON, nothing else:
  "ask": {{"how_is": "B", "related_to": "A"}}}}
 Write each fact exactly as the text states it: "X is the son of Y" -> {{"person": "X", "is_the": "son", "of": "Y"}};
 "Y's daughter is X" -> {{"person": "X", "is_the": "daughter", "of": "Y"}}. Keep the exact relation word the text uses
-(son, not child). List a gender only when the text states it (he/she, his/her, a man, a woman). Relation words allowed:
-{words}. Use the names exactly as written.
+(son, not child). List a gender whenever the text shows it: he/she, his/her, a man, a woman.
+Example: "Vani and her son Irfan went to the temple. How is Irfan related to Vani?" ->
+{{"facts": [{{"person": "Irfan", "is_the": "son", "of": "Vani"}}], "genders": [{{"person": "Vani", "gender": "female"}}],
+ "ask": {{"how_is": "Irfan", "related_to": "Vani"}}}}
+Example: "Pointing to Ravi, Asha said, 'His father is my brother.' How is Ravi related to Asha?" ->
+{{"facts": [{{"person": "#1", "is_the": "father", "of": "Ravi"}}, {{"person": "#1", "is_the": "brother", "of": "Asha"}}],
+ "genders": [{{"person": "Ravi", "gender": "male"}}], "ask": {{"how_is": "Ravi", "related_to": "Asha"}}}}
+Use "#1", "#2" for people the text mentions without a name. Relation words allowed: {words}. Use names exactly as written.
 
 Question: {q}"""
 
@@ -112,7 +118,8 @@ def needed(ex) -> list[str]:
 
 def to_facts(extracted: dict, ents: list[dict]) -> str | None:
     """The extraction as fact language, names placed the way prepare() numbered them; None if anything is off."""
-    place = placer(ents)
+    place0 = placer(ents)
+    place = lambda n: str(n).strip() if re.fullmatch(r'#\d+', str(n).strip()) else place0(n)   # unnamed people
     out = []
     for f in extracted.get('facts', []):   # "person is the R of Y" -> fact "Y R person"
         x, y, r = f.get('person'), f.get('of'), str(f.get('is_the', '')).strip().lower()
