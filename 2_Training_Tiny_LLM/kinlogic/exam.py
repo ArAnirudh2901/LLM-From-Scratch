@@ -97,6 +97,15 @@ def _relation_option(cands, options, status):
                 neutral = [(m, None) for m, _ in am]
                 if all(_same_path([(m, None) for m, _ in x], neutral) for x in alts):
                     return a, lab
+    if not _labelled(options, CANT):   # gender open, one option fits one of its readings ("Sister" for a sibling)
+        for a in cands:
+            if a.get('key') in (None, 'none') or not a.get('moves'):
+                continue
+            neutral = [(m, None) for m, _, _ in a['moves']]
+            fit = {lab for lab, text in options for alt in re.split(r'\s+or\s+|/', text)
+                   if (mv := option_moves(alt)) and _same_path([(m, None) for m, _ in mv], neutral)}
+            if len(fit) == 1:
+                return a, fit.pop()
     return None, None
 
 
