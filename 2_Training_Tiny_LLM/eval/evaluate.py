@@ -147,6 +147,26 @@ def eval_deep(model, vocab, device, root='data/dataset'):
             'deep_by_format': {f: round(a / b, 3) for (t, f), (a, b) in ok.items() if t == 'format'}}
 
 
+def eval_unseen(model, vocab, device, path='data/unseen_test.jsonl.gz'):
+    """Frozen test no run trains on or is picked with (eval/unseen_set.py): new seed, names outside every generator
+    list, wording not in any training file. Pipeline accuracy: coded questions read exactly, the rest by the model."""
+    from kinlogic.codes import read as read_code
+    from train_reader import answers, evaluate, load_jsonl
+    if not os.path.exists(path):
+        return {'unseen_acc': None}
+    rows = load_jsonl(path)
+    r, preds = evaluate(model, vocab, device, rows)
+    by = {}
+    for x, p in zip(rows, preds):
+        people = sorted({t for t in x['tokens'] if t[0] == '@'})
+        a = by.setdefault(x['kind'], [0, 0])
+        a[0] += answers(read_code(x['tokens']) or p, people) == answers(x['lf'], people)
+        a[1] += 1
+    hits = sum(a for a, _ in by.values())
+    return {'unseen_acc': round(hits / len(rows), 4), 'unseen_model_acc': r['answer'], 'unseen_n': len(rows),
+            'unseen_by_kind': {k: f'{a}/{b}' for k, (a, b) in sorted(by.items())}}
+
+
 def eval_reworded(model, vocab, device, path='data/reworded_dev.jsonl.gz'):
     """Held-out verified rewrites (kinlogic/reword_merge.py): wording no generator template wrote."""
     from train_reader import evaluate, load_jsonl
@@ -165,7 +185,7 @@ def eval_generated(model, vocab, device, n=1000, seed=4242):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--ckpt', default='runs/reader-v9/best.pt')
-    ap.add_argument('--sets', default='exam,authored,fresh,gender,deep,reworded,clutrr,riddle,generated')
+    ap.add_argument('--sets', default='exam,authored,fresh,gender,deep,unseen,reworded,clutrr,riddle,generated')
     ap.add_argument('--out', default=None, help='write the results as JSON here')
     ap.add_argument('--beam', type=int, default=8, help='readings tried per exam question (best first); 8 beat 4 by 4 exam questions, 16 adds little')
     a = ap.parse_args()
@@ -180,7 +200,8 @@ def main():
         res.update({'exam': lambda: eval_exam(beam), 'authored': lambda: eval_authored(beam),
                     'fresh': lambda: eval_items(beam, FRESH, 'fresh'), 'gender': lambda: eval_items(beam, GENDER, 'gender'), 'clutrr': lambda: eval_clutrr(read), 'riddle': lambda: eval_riddle(beam),
                     'generated': lambda: eval_generated(model, vocab, device), 'deep': lambda: eval_deep(model, vocab, device),
-                    'reworded': lambda: eval_reworded(model, vocab, device)}[s]())
+                    'reworded': lambda: eval_reworded(model, vocab, device),
+                    'unseen': lambda: eval_unseen(model, vocab, device)}[s]())
         print(json.dumps({k: v for k, v in res.items() if not k.endswith('misses')}, indent=1), flush=True)
     if a.out:
         with open(a.out, 'w') as f:
