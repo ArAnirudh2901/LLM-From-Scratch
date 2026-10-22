@@ -119,7 +119,7 @@ def main():
     ap.add_argument('--src', default='data/dataset_v2')
     ap.add_argument('--out', default='data/reworded_local.jsonl.gz')
     ap.add_argument('--n', type=int, default=20000, help='kept rewordings wanted (counting earlier runs)')
-    ap.add_argument('--chunk', type=int, default=512)
+    ap.add_argument('--chunk', type=int, default=1024)
     ap.add_argument('--model', default=MODEL)
     ap.add_argument('--workers', type=int, default=max(1, (os.cpu_count() or 2)))
     a = ap.parse_args()
@@ -157,6 +157,7 @@ def main():
             if kept >= a.n:
                 break
             batch = rows[i:i + a.chunk]
+            tg = time.time()
             news = [clean(t) for t in be.chat([REWRITE.format(q=ex['text']) for ex in batch], 0.7, 300)]
             ok, why, eg = [], {}, {}
             for ex, new in zip(batch, news):
@@ -169,8 +170,11 @@ def main():
                     ok.append((ex, new))
             raws = be.chat([EXTRACT.format(q=new, words=words) for _, new in ok], 0.0, 400) if ok else []
             futs = [pool.submit(_verify, (ex, new, raw)) for (ex, new), raw in zip(ok, raws)]
+            gpu = time.time() - tg
+            tw = time.time()
             if pending:
                 finish(pending)
+            print(f'   time: GPU {gpu:.0f}s, waiting for checks {time.time() - tw:.0f}s', flush=True)
             pending = (batch, ok, raws, why, eg, futs)
         if pending:
             finish(pending)
