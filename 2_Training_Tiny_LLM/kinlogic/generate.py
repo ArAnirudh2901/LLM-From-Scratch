@@ -337,6 +337,7 @@ def ask_text(rng, x: str, y: str) -> str:
         f'Find the relation of {y} with {x}.', f'Which of the following is the relation of {y} to {x}?',
         f'What is the relation between {y} and {x}?', f'{cap(y)} is {poss(x)}?', f'Then, how is {y} related to {x}?',
         f'How are {y} and {x} related?', f'What relation does {y} have with {x}?',
+        f'{cap(y)} is ____ of {x}.', f'{cap(y)} is {poss(x)} ____.', f'{cap(y)} is the ____ of {x}.',   # fill in the blank
     ])
 
 

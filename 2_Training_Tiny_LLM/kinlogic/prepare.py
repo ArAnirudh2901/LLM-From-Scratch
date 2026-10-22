@@ -93,6 +93,9 @@ def normalize(text: str) -> str:
     for a, b in (('‘', "'"), ('’', "'"), ('`', "'"), ('“', '"'), ('”', '"'), ('–', '-'), ('—', '-'),
                  ('−', '-'), ('…', '...'), (' ', ' ')):
         text = text.replace(a, b)
+    text = re.sub(r'(\w)\s*-\s*in\s*-\s*law\b', r'\1-in-law', text, flags=re.I)   # "mother – in – law"
+    text = re.sub(r'\bgrand\s+(father|mother|son|daughter|child|children|parent|parents)\b', r'grand\1', text, flags=re.I)
+    text = re.sub(r'_{2,}', ' ____ ', text)   # one blank token however long the line
     return re.sub(r'\s+', ' ', text).strip()
 
 
