@@ -34,6 +34,7 @@ from .prepare import prepare
 REWRITE = """Rewrite this blood-relation reasoning question as it might appear in a different competitive exam
 (bank PO, SSC, CAT, UPSC CSAT). Change the wording and sentence structure freely, but:
 - keep every person's name or letter exactly as written: each one must appear in your version,
+- keep every relation word exactly (never replace 'son' with 'child' or 'mother' with 'parent'),
 - keep every family relationship and every stated gender exactly (no new facts, none dropped; keep sentences like
   "X is a woman" or pronouns that show a gender),
 - keep the final question asking about the same two people,
@@ -58,6 +59,9 @@ Example: "Pointing to Ravi, Asha said, 'His father is my brother.' How is Ravi r
 Use "#1", "#2" for people the text mentions without a name. Relation words allowed: {words}. Use names exactly as written.
 
 Question: {q}"""
+
+
+SKIP = {'coded', 'deep-coded'}   # read exactly by kinlogic/codes.py at answer time; rewriters also 'decode' them wrongly
 
 
 def _post(url, body, headers, timeout=90):
@@ -214,7 +218,8 @@ def main():
     for f in files:
         lines = gzip.open(f, 'rt').readlines()
         rows += [json.loads(l) for l in rng.sample(lines, min(per, len(lines)))]
-    rows = [r for r in rows if isinstance(r.get('truth'), str) and "'s " not in r['truth'] and r.get('names')]
+    rows = [r for r in rows if isinstance(r.get('truth'), str) and "'s " not in r['truth'] and r.get('names')
+            and r['kind'] not in SKIP]
     rng.shuffle(rows)
     done = set()
     if os.path.exists(a.out):   # a killed run can leave a truncated last block: keep what reads

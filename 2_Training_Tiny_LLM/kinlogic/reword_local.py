@@ -21,7 +21,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 from .kin import KIN
 from .prepare import prepare
-from .reword import EXTRACT, REWRITE, accept, clean, needed, same_meaning, to_facts
+from .reword import EXTRACT, REWRITE, SKIP, accept, clean, needed, same_meaning, to_facts
 
 MODEL = 'Qwen/Qwen3-4B-Instruct-2507'
 BAD = re.compile(r'\\[a-z]+|\$[A-Za-z]|\*\*|^\s*[-*] ', re.M)
@@ -74,7 +74,7 @@ def sample_sources(src, n, seed=0, max_depth=8):
         lines = gzip.open(f, 'rt').readlines()
         rows += [json.loads(l) for l in rng.sample(lines, min(per, len(lines)))]
     rows = [r for r in rows if isinstance(r.get('truth'), str) and "'s " not in r['truth'] and r.get('names')
-            and (r.get('depth') or 0) <= max_depth]   # a 4B reader misreads very long chains
+            and (r.get('depth') or 0) <= max_depth and r['kind'] not in SKIP]   # a 4B reader misreads very long chains
     rng.shuffle(rows)
     return rows
 
