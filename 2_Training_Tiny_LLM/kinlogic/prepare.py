@@ -109,6 +109,11 @@ def normalize(text: str) -> str:
     text = re.sub(r'\b(of|is|to)([A-Z])\b', r'\1 \2', text)   # "daughter ofZ"
     text = re.sub(r'\b([A-Z])\.([A-Z]) (?=is |was |has )', r'\1. \2 ', text)   # "grandfather of U.Q is the brother"
     text = re.sub(r"\b(mother|father|brother|sister|son|daughter|wife|husband)s's\b", r"\1's", text)   # "mothers's"
+    text = re.sub(r'\baunty\b', 'aunt', text, flags=re.I)
+    if re.search(r'\bmeans?\b', text):   # digit code symbols glued to letters: "P5Q", "F3M5N3K"
+        for _ in range(4):
+            text = re.sub(r'(?<![A-Za-z0-9])([A-Z])(\d)(?=[A-Z](?![a-z]))', r'\1 \2 ', text)
+            text = re.sub(r'(?<= \d )([A-Z])(\d)(?=[A-Z](?![a-z]))', r'\1 \2 ', text)
     if re.search(r'\b(?:means?|denotes?|indicates?|represents?)\b', text):   # code questions: the letter x as the × symbol
         text = re.sub(r'(?<![A-Za-z])([A-Z])\s?[xX]\s?(?=[A-Z](?![A-Za-z]))', r'\1 × ', text)
     text = re.sub(r'\bgrand\s+(father|mother|son|daughter|child|children|parent|parents)\b', r'grand\1', text, flags=re.I)

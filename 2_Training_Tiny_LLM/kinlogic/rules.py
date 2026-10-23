@@ -419,6 +419,8 @@ def read(tokens, why=None) -> str | None:
         if k == len(parts) - 1:
             if re.search(rf'\b{PROF}s?\b', p):   # a question about professions: not in the fact language
                 return None
+            if re.fullmatch(r'(?:then ,? )?which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)', p.strip()):
+                break   # "which of the following statements is true?": the exam layer checks the options
             q = question(p, ch)
             if q:
                 ask = q
@@ -429,6 +431,8 @@ def read(tokens, why=None) -> str | None:
                 why.append(p)
             return None
         facts += got
+    if ask is None and facts and re.fullmatch(r'(?:then ,? )?which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)', parts[-1].strip()):
+        return ' ; '.join(facts)   # "which of the following statements is true?": the exam layer checks the options
     if ask is None or not facts:
         return None
     named = set(re.findall(E, ' ; '.join(facts)))

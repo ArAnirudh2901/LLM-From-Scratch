@@ -234,6 +234,62 @@ def _people(tokens, stmts):
     return out
 
 
+def _option_statements(options, ents):
+    """Claims for options that are statements about the question's people, or None."""
+    from .codes import option_claims
+    ids = {e['text']: e['id'] for e in ents if e.get('kind') in ('name', 'letter')}
+    return option_claims(options, ids)
+
+
+ROLE_PAIR = re.compile(r'^\s*([a-z][a-z -]*?)\s*(?:–|-|—|and|/|&)\s*([a-z][a-z -]*?)\s*$', re.I)
+PLURAL_ROLE = {'cousins': 'cousin', 'brothers': 'brother', 'sisters': 'sister', 'siblings': 'sibling', 'couple': 'spouse',
+               'husband and wife': 'spouse', 'brothers-in-law': 'brother-in-law', 'sisters-in-law': 'sister-in-law'}
+
+
+def _pair_option(r, stmts, options, ents):
+    """For "how is Y related to X?" / "relationship between X and Y": the one option that holds in every family, when
+    the options are statements ("P is the husband of T") or role pairs ("Uncle – Niece", "Cousins")."""
+    from .codes import _rel as code_rel
+    ask = next((st for st in reversed(stmts) if st['t'] == 'ask'), None)
+    if ask is None or not r['worlds']:
+        return None
+    x, y = ask['x'], ask['y']
+    ids = {e['text']: e['id'] for e in ents if e.get('kind') in ('name', 'letter')}
+    st_claims = _option_statements(options, ents)
+
+    def holds(facts):
+        return all(claim_holds(w, facts, r['ids']) is True for w in r['worlds'])
+
+    def rel_fact(a, word, b):   # b is a's WORD
+        rr = code_rel(word.strip().lower())
+        return None if rr is None else {'t': 'rel', 'x': a, 'r': rr[1], 'side': rr[0], 'y': b, 'neg': False, 'only': False, 'claim': 1}
+
+    ok = []
+    if st_claims:
+        groups, cur = [], None
+        for st in parse(' ; '.join(st_claims))[0]:
+            if cur is None or st.get('claim') != cur[0]:
+                cur = (st.get('claim'), [])
+                groups.append(cur)
+            cur[1].append(st)
+        labs = [l for l, o in options if not NONE.search(o) and not CANT.search(o)]
+        if len(groups) != len(labs):
+            return None
+        ok = [l for l, (_, fs) in zip(labs, groups) if all(f.get('x') in r['ids'] and (f.get('y', '@x')[0] == '#' or f.get('y') in r['ids']) for f in fs) and holds(fs)]
+    else:
+        for lab, o in options:
+            t = o.strip().lower().rstrip('.')
+            if t in PLURAL_ROLE:   # "Cousins": each is the other's
+                f1, f2 = rel_fact(x, PLURAL_ROLE[t], y), rel_fact(y, PLURAL_ROLE[t], x)
+            elif (m := ROLE_PAIR.match(t)) and code_rel(m.group(1).strip()) and code_rel(m.group(2).strip()):
+                f1, f2 = rel_fact(x, m.group(1), y), rel_fact(y, m.group(2), x)   # "Uncle – Niece": the first named (y) is the uncle
+            else:
+                continue
+            if f1 and f2 and x in r['ids'] and y in r['ids'] and holds([f1, f2]):
+                ok.append(lab)
+    return ok[0] if len(ok) == 1 else None
+
+
 def _shape(mv):
     """(generations up, gender, by marriage, collateral) of a move path."""
     ms = [m[0] for m in mv]
@@ -303,8 +359,13 @@ def _answer_one(p, lf, read, priors):
     stmts, _ = parse(lf)
     people = _people(p['tokens'], stmts)
     low = p['question'].lower()
+    if options and stmts and not any(st['t'] in ('ask', 'who', 'count', 'gender?', 'pair') or st.get('claim') or st.get('part') for st in stmts) \
+            and re.search(r'which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)\b', low):
+        cl = _option_statements(options, ents)   # "which of the following statements is not definitely true?" after an exact reading
+        if cl:
+            stmts = stmts + parse(' ; '.join(cl))[0]
 
-    expr_opts = options and sum(bool(re.search(r'[A-Za-z]\s*[^\w\s,.()\'"]{1,2}\s*[A-Za-z]', o)) for _, o in options) * 2 > len(options)
+    expr_opts = options and sum(bool(re.search(r'\b[A-Za-z]\s*(?:[^\w\s,.()\'"]{1,2}|\d)\s*[A-Za-z]\b', o)) for _, o in options) * 2 > len(options)
     if any(s.get('claim') for s in stmts) and expr_opts:   # the options are expressions: read each one
         return {**out, **_which_expression(p, stmts, read, priors)}
     if any(s.get('claim') for s in stmts):
@@ -358,6 +419,9 @@ def _answer_one(p, lf, read, priors):
             a, lab = _relation_option(alternatives(r, qi), options, status)
             if lab:
                 res['explanation'] += f"\n[NOTE]: Read with {names.get(a['merged'][1], a['merged'][1])} as the person the text leaves unnamed."
+            elif (lab := _pair_option(r, stmts, options, ents)):   # "(a) P is the husband of T", "(b) Uncle – Niece"
+                res['explanation'] += '\n[NOTE]: The option that holds in every family that fits.'
+                return {**out, **res, 'answer': cands[0].get('label') or cands[0]['key'], 'option': lab}
             elif INVERSE and not _labelled(options, NONE) and not _labelled(options, CANT):
                 q2 = _inverse(stmts, people, priors, bool(spoken))   # "How is Riya related to that man? (a) Father": keyed the other way round
                 a, lab = _relation_option(list(q2['answers']), options, q2['status']) if q2 else (None, None)
