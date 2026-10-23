@@ -47,6 +47,9 @@ def broken(r) -> str | None:
             return 'conflicting code definitions'
     if not r['options'] and not ASK.search(q):
         return 'no question'
+    key = str(r.get('answer') or '').strip().lower()
+    if r['options'] and len(key) == 1 and key not in {str(lab).strip().lower() for lab, _ in r['options']}:
+        return 'key not among the options'   # options lost in scraping
     return None
 
 
