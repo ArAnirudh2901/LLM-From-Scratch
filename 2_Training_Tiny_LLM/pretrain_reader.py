@@ -56,6 +56,8 @@ def main():
     ap.add_argument('--block', type=int, default=512)
     ap.add_argument('--batch', type=int, default=32)
     ap.add_argument('--lr', type=float, default=6e-4)
+    ap.add_argument('--optim', default='adamw', choices=['adamw', 'muon'], help='muon: NorMuon + cautious weight decay (optim_muon.py)')
+    ap.add_argument('--qk_norm', action='store_true', help='RMSNorm on queries and keys (OLMo 2 / Qwen3; largest single gain in IMU-1)')
     ap.add_argument('--warmup', type=int, default=1000)
     ap.add_argument('--weight_decay', type=float, default=0.1)
     ap.add_argument('--anneal', default=None, help='shards of kinship text mixed into the decay phase (SmolLM2, MiniCPM, OLMo 2)')
@@ -73,7 +75,7 @@ def main():
     ck = torch.load(latest, map_location='cpu', weights_only=False) if a.resume and os.path.exists(latest) else None
     v = json.load(open(a.vocab)) if not ck else {'itos': ck['vocab'], 'merges': ck['merges']}
     cfg = ck['config'] if ck else {'arch': 'v10', 'vocab_size': len(v['itos']), 'block_size': a.block, 'n_layer': a.n_layer,
-                                   'n_head': a.n_head, 'n_embd': a.n_embd, 'dropout': 0.0}
+                                   'n_head': a.n_head, 'n_embd': a.n_embd, 'dropout': 0.0, **({'qk_norm': True} if a.qk_norm else {})}
     model = make_model(cfg).to(dev)
     if ck:
         model.load_state_dict(ck['model'])
@@ -81,8 +83,16 @@ def main():
     decay_from = int(0.8 * steps)
     decay = [p for n, p in model.named_parameters() if p.dim() >= 2 and 'emb' not in n]   # no decay on embeddings and norms (OLMo 2, SmolLM3)
     rest = [p for n, p in model.named_parameters() if not (p.dim() >= 2 and 'emb' not in n)]
-    opt = torch.optim.AdamW([{'params': decay, 'weight_decay': a.weight_decay}, {'params': rest, 'weight_decay': 0.0}],
-                            lr=a.lr, betas=(0.9, 0.95), fused=dev.type == 'cuda')
+    if a.optim == 'muon':   # NorMuon + cautious weight decay on the blocks' matrices (IMU-1 recipe), AdamW elsewhere
+        from optim_muon import Muon
+        hid = [p for n, p in model.named_parameters() if n.startswith('blocks.') and p.dim() == 2]
+        ids = {id(p) for p in hid}
+        opt = Muon([{'params': hid, 'use_muon': True, 'weight_decay': a.weight_decay},
+                    {'params': [p for p in decay if id(p) not in ids], 'weight_decay': a.weight_decay},
+                    {'params': rest, 'weight_decay': 0.0}], lr=a.lr)
+    else:
+        opt = torch.optim.AdamW([{'params': decay, 'weight_decay': a.weight_decay}, {'params': rest, 'weight_decay': 0.0}],
+                                lr=a.lr, betas=(0.9, 0.95), fused=dev.type == 'cuda')
     amp = a.amp and dev.type == 'cuda'
     scaler = torch.amp.GradScaler('cuda', enabled=amp)
     step = 0
