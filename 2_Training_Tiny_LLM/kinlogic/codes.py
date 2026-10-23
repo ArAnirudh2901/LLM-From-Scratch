@@ -53,10 +53,12 @@ def _rel(word):
 def definitions(text):
     """{symbol: (side, relation, flipped)}: flipped when "A op B" means "B is A's relation"; None if two
     definitions of one symbol disagree."""
-    defs = {}
+    defs, typo = {}, {}
     for m in DEF_FWD.finditer(text):
         a, op, b, x, rel, y = m.groups()
         r = _rel(rel)
+        if r is not None and op not in NOT_OP and a != b and x in (a, b) and y not in (a, b):
+            typo[op] = (r[0], r[1], x == b)   # "P ÷ Q means P is the son of B": a misprint for Q, used only if nothing else defines ÷
         if r is None or op in NOT_OP or {x, y} != {a, b} or a == b:
             continue
         d = (r[0], r[1], x == b)
@@ -76,6 +78,8 @@ def definitions(text):
             continue
         if defs.setdefault(op, (None, 'spouse', False)) != (None, 'spouse', False):
             return None
+    for op, d in typo.items():
+        defs.setdefault(op, d)
     return defs
 
 
@@ -123,6 +127,42 @@ def facts_of(run, defs):
     return fs
 
 
+_W = r'([A-Za-z]\w*)'
+_R = r'((?:paternal |maternal )?[a-z][a-z-]*?)'
+PAIR = re.compile(rf'^\s*{_W} and {_W} are (brothers|sisters|siblings|cousins|brothers-in-law|sisters-in-law|(?:a )?(?:married )?couple|husband and wife)\s*\.?\s*$', re.I)
+SAME = re.compile(rf'^\s*(?:the )?gender of {_W} and {_W} is (?:the )?(same|different)\s*\.?\s*$', re.I)
+NESTED = re.compile(rf'^\s*{_W} is (?:the )?{_R} of (?:the )?{_R} of {_W}\s*\.?\s*$', re.I)
+BOTH = re.compile(rf'^\s*{_W} is (?:the )?{_R} (?:of|to) {_W} and {_W}\s*\.?\s*$', re.I)
+
+
+def _option_forms(o, ids):
+    """Facts for the wider statement forms; None when o is not one of them, [] when it is but cannot be read."""
+    one = lambda x, rel, y: (lambda r: None if r is None or x not in ids or y not in ids else f"{ids[y]} {(r[0] + ' ') if r[0] else ''}{r[1]} {ids[x]}")(_rel(rel.lower()))
+    if m := PAIR.match(o):
+        x, y, kind = m.group(1), m.group(2), m.group(3).lower()
+        if x not in ids or y not in ids:
+            return []
+        if 'couple' in kind or 'husband' in kind:
+            return [f'{ids[x]} spouse {ids[y]}']
+        word = {'brothers': 'brother', 'sisters': 'sister', 'siblings': 'sibling', 'cousins': 'cousin',
+                'brothers-in-law': 'brother-in-law', 'sisters-in-law': 'sister-in-law'}[kind]
+        return [f'{ids[x]} {word} {ids[y]}', f'{ids[y]} {word} {ids[x]}'] if word in KIN else []
+    if m := SAME.match(o):
+        x, y = m.group(1), m.group(2)
+        return [f"{ids[x]} {'same' if m.group(3).lower() == 'same' else 'opposite'} {ids[y]}"] if x in ids and y in ids else []
+    if m := NESTED.match(o):   # "R is the sister of the wife of U": U's wife's sister is R
+        x, r1, r2, y = m.groups()
+        a, b = _rel(r2.lower()), _rel(r1.lower())
+        if a is None or b is None or x not in ids or y not in ids:
+            return []
+        return [f"{ids[y]} {(a[0] + ' ') if a[0] else ''}{a[1]} #90", f"#90 {(b[0] + ' ') if b[0] else ''}{b[1]} {ids[x]}"]
+    if m := BOTH.match(o):   # "K is father of L and M"
+        x, rel, y1, y2 = m.groups()
+        fs = [one(x, rel, y1), one(x, rel, y2)]
+        return fs if all(fs) else []
+    return None
+
+
 def option_claims(options, ids):
     """Claims for statement options ("G is the maternal grandmother of R"), in option order; None unless every option
     except a closing 'none of these' is a statement about people of the question. ids: name/letter -> @k."""
@@ -130,6 +170,13 @@ def option_claims(options, ids):
     for _, o in options or []:
         o = _in_law(o.strip())
         if re.fullmatch(r'(?:none of (?:these|the above)|all of (?:these|the above)|cannot be determined)\.?', o, re.I):
+            continue
+        extra = _option_forms(o, ids)
+        if extra is not None:   # "F and Y are brothers", "gender of F and W is same", "R is the sister of the wife of U"
+            if not extra:
+                return None
+            n += 1
+            out += [f'claim {n}'] + extra
             continue
         m, mp = STATEMENT.match(o), STATEMENT_POSS.match(o)
         if mp:
