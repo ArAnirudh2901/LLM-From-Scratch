@@ -187,6 +187,14 @@ def clause(c: str):
     m = re.fullmatch(rf'{E} married to {E}', c)
     if m:
         return [f'{m.group(1)} spouse {m.group(2)}']
+    m = re.fullmatch(rf'{E} is married to {E} and has (\w+) (sons|daughters|children) ,? {E} and {E}', c)
+    if m and _num(m.group(3)) == 2:   # "... is married to Z and has two sons A and B"
+        r = {'children': 'child'}.get(m.group(4), PLURAL.get(m.group(4)))
+        x = m.group(1)
+        return [f'{x} spouse {m.group(2)}', f'{x} has 2 {r}', f'{x} {r} {m.group(5)}', f'{x} {r} {m.group(6)}']
+    m = re.fullmatch(rf'{E} is neither married to {E} nor (?:to )?{E}', c)
+    if m:
+        return [f'{m.group(1)} not spouse {m.group(2)}', f'{m.group(1)} not spouse {m.group(3)}']
     m = re.fullmatch(rf'{E} is (?:a |an |the )?{PROF}', c)   # "X is a doctor"
     if m:
         return [f'{m.group(1)} prof {m.group(2)}']
@@ -229,6 +237,7 @@ def header(c: str):
     """Closed-family facts from a header sentence in any order ("there are nine members in three generations and three
     married couples", "X , Y , ... are six family members"); None if any other word is left."""
     out, rest = [], ' ' + c + ' '
+    rest = re.sub(r'no single (?:member|one) (?:in the family )?is (?:a |the )?parent|no single parent has a child', 'no single parent', rest)
     if re.search(r'no single (?:parent|person (?:in the family )?is (?:a |the )?parent)|no one in the family is a single parent|there are no single parents', rest):
         out.append('singles 0')
         rest = re.sub(r'(?:there is )?no single (?:parent|person (?:in the family )?is (?:a |the )?parent)(?: in the family)?|no one in the family is a single parent|there are no single parents(?: in the family)?', ' ', rest)
@@ -365,6 +374,10 @@ def _part(p: str, ch, depth: int = 0):
     m = re.fullmatch(rf'{E} has (?:a|an) {REL}', p)   # "X has a daughter": someone unnamed
     if m and _rel(m.group(2)) and not _rel(m.group(2)).startswith('only'):
         return [f'{m.group(1)} {_rel(m.group(2))} {ch.new()}']
+    m = re.fullmatch(rf"{E} is not (?:the )?{REL} of {E} 's {REL}", p)   # "X is not the granddaughter of Y 's sister"
+    if m and _rel(m.group(2)) and _rel(m.group(4)) and not _rel(m.group(4)).startswith('only'):
+        k = ch.new()
+        return [f'{m.group(3)} {_rel(m.group(4))} {k}', f'{k} not {_rel(m.group(2))} {m.group(1)}']
     m = re.fullmatch(rf'{E} has (?:a|an) {REL} and (?:a|an) {REL}', p)   # "X has a brother and a niece"
     if m and _rel(m.group(2)) and _rel(m.group(3)) and not any(_rel(g).startswith('only') for g in m.groups()[1:]):
         return [f'{m.group(1)} {_rel(m.group(2))} {ch.new()}', f'{m.group(1)} {_rel(m.group(3))} {ch.new()}']
