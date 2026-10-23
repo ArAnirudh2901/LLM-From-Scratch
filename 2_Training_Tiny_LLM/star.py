@@ -57,13 +57,6 @@ def main():
             facts_in = lambda lf: sum(1 for f in lf.split(' ; ') if f.split()[:1] not in (['ask'], ['who'], ['count']))
             sizes = sorted(facts_in(lf) for lf, _ in list(b) + list(s))
             typical = sizes[len(sizes) // 2] if sizes else 0
-            try:   # the reader's best reading has no fitting family: the question itself is likely inconsistent
-                top = _answer_one(p, b[0][0], lambda batch: [''] * len(batch), None) if b else {}
-            except Exception:
-                top = {}
-            if top.get('status') == 'contradiction' and not exact:
-                stats['inconsistent question'] += 1
-                continue
             good = {}
             for lf, sc in list(b) + list(s):
                 if lf in good:
