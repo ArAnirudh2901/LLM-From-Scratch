@@ -18,7 +18,10 @@ import random
 import re
 import time
 
-from .reword import call
+from .reword import call, call_rotating
+
+WRITERS = os.environ.get('SYMGEN_WRITERS', 'gemini-3.5-flash-lite,gemini-3.1-flash-lite-preview,gemini-flash-latest,gemini-3.6-flash').split(',')
+SOLVERS = os.environ.get('SYMGEN_SOLVERS', 'gemini-flash-lite-latest,gemini-3.7-flash,gemini-3.8-flash').split(',')
 
 STYLES = {
     'puzzle': "a closed-family puzzle: 'There are N members P, Q, R, ... in a family of two or three generations' with "
@@ -101,15 +104,15 @@ def _json(text):
 
 
 def batch(style, n, rng):
-    raw = call(WRITE.format(n=n, style=STYLES[style], names=rng.choice(NAMES), features=features(rng)), 'gemini', temperature=1.0,
-               json_out=True)
+    raw = call_rotating(WRITE.format(n=n, style=STYLES[style], names=rng.choice(NAMES), features=features(rng)), WRITERS, temperature=1.0,
+                        json_out=True)
     qs = [q for q in (_json(raw) or []) if isinstance(q, dict) and isinstance(q.get('question'), str)
           and isinstance(q.get('options'), list) and 4 <= len(q['options']) <= 5 and isinstance(q.get('answer'), int)
           and 0 <= q['answer'] < len(q['options'])]
     if not qs:
         return [], 0
-    solved = _json(call(SOLVE.format(qs='\n\n'.join(f'Q{i + 1}. {as_text(q)}' for i, q in enumerate(qs))), 'gemini',
-                        temperature=0.0, json_out=True, model=os.environ.get('SYMGEN_SOLVER', 'gemini-flash-lite-latest'))) or []
+    solved = _json(call_rotating(SOLVE.format(qs='\n\n'.join(f'Q{i + 1}. {as_text(q)}' for i, q in enumerate(qs))), SOLVERS,
+                                 temperature=0.0, json_out=True)) or []
     keep = [dict(q, style=style) for q, s in zip(qs, solved) if s == q['answer']]
     return keep, len(qs)
 
