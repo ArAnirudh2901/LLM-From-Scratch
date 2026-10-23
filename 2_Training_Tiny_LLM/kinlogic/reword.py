@@ -109,6 +109,10 @@ def call_rotating(prompt: str, models: list[str], **kw) -> str:
                 _RESTING[m] = time.time() + 600
                 last = e
                 continue
+            if e.code in (400, 404):   # this model rejects the request (unsupported setting, retired): skip it today
+                _RESTING[m] = time.time() + 86400
+                last = e
+                continue
             raise
     raise last or RuntimeError('every model is resting')
 

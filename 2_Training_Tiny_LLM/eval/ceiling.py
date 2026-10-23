@@ -64,10 +64,12 @@ def main():
     ap.add_argument('--split', default='dev')
     ap.add_argument('--out', required=True)
     ap.add_argument('--batch', type=int, default=6)
+    ap.add_argument('--shard', default='0/1', help='i/n: this process takes every question whose index % n == i')
     ap.add_argument('--models', default=os.environ.get('CEILING_MODELS', 'gemini-3.5-flash,gemini-3.6-flash,gemini-3.7-flash,gemini-3.8-flash,gemini-3-flash-preview'))
     a = ap.parse_args()
     models = a.models.split(',')
-    rows = [r for r in load_real() if split_of(r) == a.split and not broken(r)]
+    si, sn = map(int, a.shard.split('/'))
+    rows = [r for j, r in enumerate(x for x in load_real() if split_of(x) == a.split and not broken(x)) if j % sn == si]
     done = json.load(open(a.out)) if os.path.exists(a.out) else {}
     ex = examples()
     words = ', '.join(sorted(KIN))
