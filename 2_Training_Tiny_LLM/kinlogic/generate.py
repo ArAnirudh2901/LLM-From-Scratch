@@ -9,6 +9,7 @@ data sufficiency, statements to verify, stories, plus Hindi kinship words.
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass
 
 from .engine import World, relation_in
@@ -1347,6 +1348,36 @@ def sample(rng: random.Random, mix: dict | None = None) -> dict:
         ex = KINDS[rng.choices(kinds, weights)[0]](rng)
         if ex is not None:
             return ex
+
+
+FLIP = {'son': 'daughter', 'brother': 'sister', 'father': 'mother', 'husband': 'wife', 'uncle': 'aunt', 'nephew': 'niece',
+        'grandson': 'granddaughter', 'grandfather': 'grandmother', 'son-in-law': 'daughter-in-law',
+        'father-in-law': 'mother-in-law', 'brother-in-law': 'sister-in-law'}
+FLIP.update({v: k for k, v in list(FLIP.items())})
+GENDERED = {'he', 'she', 'his', 'her', 'him', 'himself', 'herself', 'man', 'woman', 'boy', 'girl', 'lady', 'gentleman', 'mr', 'mrs',
+            'male', 'female', 'sons', 'daughters', 'brothers', 'sisters'}
+
+
+def flip_pair(ex: dict, rng: random.Random) -> dict | None:
+    """A minimal pair: one relation word swapped for its other-gender form in both the text and the facts, kept only
+    when the facts stay consistent and the answer changes (reader errors are often one word)."""
+    from train_reader import answers
+    toks = ex['tokens']
+    if GENDERED & set(toks) or any(k in ex['kind'] for k in ('coded', 'claims', 'sufficiency')):
+        return None
+    facts = ex['lf'].split(' ; ')
+    cands = [w for w in FLIP if toks.count(w) == 1 and sum(f.split().count(w) for f in facts) == 1]
+    if not cands:
+        return None
+    w = rng.choice(cands)
+    toks2 = [FLIP[w] if t == w else t for t in toks]
+    lf2 = ' ; '.join(' '.join(FLIP[w] if x == w else x for x in f.split()) for f in facts)
+    people = sorted({t for t in toks if t[0] == '@'})
+    a, b = answers(ex['lf'], people), answers(lf2, people)
+    if b is None or a == b or 'contradiction' in str(b):
+        return None
+    return {**ex, 'kind': ex['kind'] + '-pair', 'tokens': toks2, 'lf': lf2,
+            'text': re.sub(rf'\b{re.escape(w)}\b', FLIP[w], ex['text'], count=1)}
 
 
 def write_shard(path: str, n: int, seed: int, mix: dict | None = None):

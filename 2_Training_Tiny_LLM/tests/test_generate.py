@@ -74,3 +74,22 @@ def test_generated_questions_are_true(kind):
                 misses.append((ex['text'][:200], ex['lf'], t, keys[:3]))
     assert made > 100
     assert len(misses) <= 0.03 * made, misses[:5]
+
+
+def test_flip_pair_changes_the_answer_and_stays_consistent():
+    import random
+    from kinlogic.generate import flip_pair, sample
+    from train_reader import answers
+    rng, made = random.Random(3), 0
+    for _ in range(400):
+        ex = sample(rng)
+        pr = flip_pair(ex, rng)
+        if pr is None:
+            continue
+        made += 1
+        people = sorted({t for t in ex['tokens'] if t[0] == '@'})
+        assert pr['kind'].endswith('-pair') and 'coded' not in pr['kind']
+        assert sum(a != b for a, b in zip(ex['tokens'], pr['tokens'])) == 1
+        assert answers(pr['lf'], people) not in (None, answers(ex['lf'], people))
+    assert made >= 10
+
