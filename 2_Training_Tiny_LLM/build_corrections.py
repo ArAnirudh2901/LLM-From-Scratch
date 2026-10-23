@@ -67,9 +67,14 @@ def main():
     model, vocab = load(a.ckpt, dev)
     blocked = real_keys()
     rows = [r for r in sources(a, rng) if hashlib.sha1(' '.join(r['tokens']).encode()).hexdigest() not in blocked]
+    key = lambda r: hashlib.sha1(' '.join(r['tokens']).encode()).hexdigest()
+    import os
+    done = set(open(a.out + '.done').read().split()) if os.path.exists(a.out + '.done') else set()   # resume
+    have = sum(1 for _ in gzip.open(a.out, 'rt')) if os.path.exists(a.out) else 0
+    rows = [r for r in rows if key(r) not in done]
     st, out = collections.Counter(), []
     for i in range(0, len(rows), a.bs):
-        if len(out) >= a.n:
+        if have + len(out) >= a.n:
             break
         chunk = rows[i:i + a.bs]
         toks = [r['tokens'] for r in chunk]
@@ -94,10 +99,14 @@ def main():
                     continue
                 out.append({'kind': 'correct-' + ('keep' if right else v), 'tokens': with_draft(r['tokens'], lf, v), 'lf': r['lf']})
                 st['right (keep row)' if right else f'wrong ({v})'] += 1
-        print(f'{min(i + a.bs, len(rows))}/{len(rows)} | rows {len(out)} | {dict(st)}', flush=True)
-    with gzip.open(a.out, 'wt') as f:
-        f.write(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in out[:a.n]))
-    print('done', len(out[:a.n]), dict(st))
+        with gzip.open(a.out, 'at') as f:   # one gzip block per batch: a stopped run keeps its rows
+            f.write(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in out))
+        with open(a.out + '.done', 'a') as f:
+            f.write(''.join(key(r) + '\n' for r in chunk))
+        have += len(out)
+        out = []
+        print(f'{min(i + a.bs, len(rows))}/{len(rows)} | rows {have} | {dict(st)}', flush=True)
+    print('done', have, dict(st))
 
 
 if __name__ == '__main__':
