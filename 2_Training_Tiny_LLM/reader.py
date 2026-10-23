@@ -285,3 +285,38 @@ def fact_token_logprobs(model, idx, tgt, vocab):
     out = torch.zeros(tgt.shape, device=idx.device)
     out[mt] = lp.gather(1, tgt[mt][:, None])[:, 0]
     return out, mt
+
+
+@torch.no_grad()
+def halt_prob(model, vocab: Vocab, tokens, lf: str, r: int, device) -> float:
+    """The looped reader's own estimate that `lf` is finished after r loops: P(stopped by loop r), averaged over its tokens."""
+    enc = encode_example(vocab, tokens, lf, model.block_size)
+    if enc is None or getattr(model, 'exit_gate', None) is None:
+        return 1.0
+    idx, tgt, _ = collate([enc], vocab.stoi['<pad>'], device)
+    _, lams = model.hidden_loops(idx)
+    m = tgt != -100
+    lam = torch.stack([x[m] for x in lams[:r]], 1)
+    return float((1 - torch.prod(1 - lam, 1)).mean())
+
+
+def answer_looped(text: str, model, vocab: Vocab, device, k: int = 8, tau_lambda: float = 0.5, tau_vote: float = 0.6):
+    """Halting with two judges: after r loops the answer stands when the engine accepts it (a family fits, the vote is
+    clear) and the exit gate agrees the reading is finished (lambda); otherwise one more loop, up to the model's maximum."""
+    from kinlogic.exam import answer
+    from kinlogic.prepare import prepare
+    toks = prepare(text)['tokens']
+    R, res = getattr(model, 'n_loop', 1), {}
+    try:
+        for r in range(1, R + 1):
+            model.set_loops(r) if R > 1 else None
+            res = answer(text, lambda b: generate(model, vocab, b, device, k=k))
+            if r == R:
+                break
+            engine_ok = res.get('status') not in ('error', 'none', 'contradiction') and res.get('confidence', 1.0) >= tau_vote
+            if engine_ok and res.get('facts') and halt_prob(model, vocab, toks, res['facts'], r, device) >= tau_lambda:
+                break
+        return {**res, 'loops': r}
+    finally:
+        if R > 1:
+            model.set_loops(R)
