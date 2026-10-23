@@ -439,22 +439,85 @@ def _finish(w, run: _Run):
         for w4 in counted(w2):
                 for w5 in _gender_totals(w4, run):
                     for w6 in _gender_links(w5, run.links, run):
-                        if not w6.valid():
-                            continue
-                        if not _negations(w6, run):
-                            continue
-                        if not all(_attr_holds(w6, ids[f['x']], f['a']) for f in run.after):
-                            continue
-                        if any(len(w6.relatives(ids[f['x']], f['r'], f.get('side'))) != f['n'] for f in run.has):
-                            continue
-                        if run.generations:
-                            span, parts = _generations(w6, run)
-                            # separate groups may sit on any levels relative to each other: only too many is wrong
-                            if span > run.generations or (parts == 1 and span != run.generations):
-                                continue
-                        if run.singles is not None and _singles(w6, run) != run.singles:
-                            continue
-                        yield w6
+                        if _final_ok(w6, run):
+                            yield w6
+
+
+def _final_ok(w6, run: _Run) -> bool:
+    ids = run.ids
+    if not w6.valid() or not _negations(w6, run):
+        return False
+    if not all(_attr_holds(w6, ids[f['x']], f['a']) for f in run.after):
+        return False
+    if any(len(w6.relatives(ids[f['x']], f['r'], f.get('side'))) != f['n'] for f in run.has):
+        return False
+    if run.generations:
+        span, parts = _generations(w6, run)
+        # separate groups may sit on any levels relative to each other: only too many is wrong
+        if span > run.generations or (parts == 1 and span != run.generations):
+            return False
+    return run.singles is None or _singles(w6, run) == run.singles
+
+
+def _levels_ok(w) -> bool:
+    """Everyone sits on one generation: parents one up, children one down, spouses level."""
+    level = {}
+    for start in w.roots():
+        if start in level:
+            continue
+        level[start], todo = 0, [start]
+        while todo:
+            x = todo.pop()
+            for y, d in [(w.father(x), -1), (w.mother(x), -1), (w.spouse(x), 0)] + [(c, 1) for c in w.children(x)]:
+                if y < 0:
+                    continue
+                y = w.find(y)
+                if y not in level:
+                    level[y] = level[x] + d
+                    todo.append(y)
+                elif level[y] != level[x] + d:
+                    return False
+    return True
+
+
+def _smallest(worlds, run: _Run, facts=(), priors=None, keep=(), cap: int = 400):
+    """Exam convention for spoken descriptions ("my father's son", "my mother's daughter-in-law"): the smallest family
+    that fits. Unnamed people are made one with someone else while every fact still holds; the families with the
+    fewest people are kept."""
+    seen, frontier, found = set(), list(worlds), list(worlds)
+    while frontier and len(found) < cap:
+        nxt = []
+        for w in frontier:
+            roots = w.roots()
+            asked = {w.find(run.ids[e]) for e in keep}
+            for u in roots:
+                if w.named[u] or (w.ent[u] and not w.ent[u].startswith('#')) or u in asked:   # people the text points at or asks about stay themselves
+                    continue
+                for v in roots:
+                    if v == u or (not w.named[v] and v < u) or not run.tick():
+                        continue
+                    w2 = w.clone()
+                    if not (w2.unify(u, v) and w2.normalize() and _final_ok(w2, run) and _violation(w2, run) is None):
+                        continue
+                    if any(w.ent[n] in (priors or {}) and not w.g(n) and w2.g(n) not in (None, priors[w.ent[n]])
+                           for n in roots if w.named[n]):   # never against the gender a name suggests
+                        continue
+                    ids = run.ids   # every stated relation still named so; no couple of blood relatives
+                    if any(f['t'] == 'rel' and w2.find(ids[f['y']]) not in w2.relatives(ids[f['x']], f['r'], f.get('side'))
+                           for f in facts if f.get('t') == 'rel' and f['x'] in ids and f['y'] in ids):
+                        continue
+                    if any(w2.spouse(x) >= 0 and _blood(w2, x, w2.spouse(x)) for x in w2.roots()) or not _levels_ok(w2):
+                        continue
+                    key = tuple(sorted(tuple(sorted(w2.find(r) for r in range(len(w2.uf)) if w2.find(r) == x)) for x in w2.roots()))
+                    if key not in seen:
+                        seen.add(key)
+                        nxt.append(w2)
+        frontier = nxt[:cap]
+        found += frontier
+    against = lambda w: _assume(w, priors or {}, run.ids)[2]   # families that agree with the names come first
+    rank = {id(w): (against(w), len(w.roots())) for w in found}
+    best = min(rank.values())
+    return [w for w in found if rank[id(w)] == best]
 
 
 def _negations(w, run: _Run) -> bool:
@@ -870,13 +933,14 @@ def _assume(w: World, priors: dict, ids: dict):
 
 
 def solve(stmts: list[dict], label=lambda e: e, asks=(), parts=None, people=(), priors=None, max_steps: int = 20000,
-          max_families: int = 2000) -> dict:
+          max_families: int = 2000, smallest: bool = False) -> dict:
     """Solves parsed fact statements (facts.parse).
 
     label(ent) -> display name used in conditions; asks: extra (x, y) pairs to answer (people the user picked);
     parts: the data-sufficiency statements to use (None: all); people: every placeholder in the text (a puzzle's
     members include those no fact mentions); priors: {placeholder: 'M' | 'F'} genders suggested by names, used only
-    where the facts leave a gender open (readings that agree with them come first).
+    where the facts leave a gender open (readings that agree with them come first); smallest: keep only the families
+    with the fewest people once unnamed people may be anyone (the exam convention for spoken descriptions).
     Returns {ok, complete, families, questions: [{q, status, answers, neutral?}], claims: {n: verdict}, worlds, ids}."""
     if parts is not None:
         stmts = [s for s in stmts if not s.get('part') or s['part'] in parts]
@@ -937,6 +1001,14 @@ def solve(stmts: list[dict], label=lambda e: e, asks=(), parts=None, people=(), 
         if len(worlds) >= max_families:
             run.cut = True
             break
+    if smallest and worlds:
+        asked = [q for q in questions if q['t'] == 'ask']
+        small = _smallest(worlds, run, facts, priors, keep=[e for q in asked for e in (q['x'], q['y'])])
+        seen_as = lambda ws: {(r.get('base'), r.get('side')) for w in ws for q in asked
+                              for r in [relation_in(w, ids[q['x']], ids[q['y']])]}
+        a0, a1 = seen_as(worlds), seen_as(small)
+        if not ({b for b, _ in a1} == {b for b, _ in a0} and a1 < a0):   # it only picked paternal/maternal: keep open
+            worlds = small
     out = {'ok': bool(worlds), 'complete': not run.cut, 'families': len(worlds), 'questions': [],
            'worlds': worlds, 'ids': ids, 'claims': {}}
     for k, group in claims.items():

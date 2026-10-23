@@ -238,6 +238,16 @@ def read(tokens, options=None, ents=None) -> str | None:
     return ' ; '.join([f for r in runs for f in facts_of(r, defs)] + extra + genders + [f'ask {x} {y}'])
 
 
+def _fits(lf):
+    """An exact reading no family fits (a description that is someone named, a lost sentence): let the model read."""
+    if lf is None:
+        return None
+    from .engine import solve
+    from .facts import parse
+    st, bad = parse(lf)
+    return lf if not bad and solve(st, max_steps=20000)['ok'] else None
+
+
 def with_codes(read_model, prep=None):
     """A reader that reads coded questions exactly and passes the rest to `read_model`. prep: the prepare() result of
     the question being answered, so statement options can become claims."""
@@ -245,7 +255,7 @@ def with_codes(read_model, prep=None):
         from .rules import read as read_rules     # formulaic statement questions, read exactly too
         from .speech import read as read_speech   # formulaic "pointing to ..., X said ..." questions
         dec = [read(t, prep['options'], prep['ents']) if prep and t is prep['tokens'] else read(t) for t in batch]
-        dec = [d if d is not None else read_rules(t) or read_speech(t) for d, t in zip(dec, batch)]
+        dec = [d if d is not None else _fits(read_rules(t) or read_speech(t)) for d, t in zip(dec, batch)]
         need = [t for t, d in zip(batch, dec) if d is None]
         got = iter(read_model(need) if need else [])
         return [d if d is not None else next(got) for d in dec]

@@ -71,33 +71,82 @@ def _step(base, rel, ch, end=None):
     return node
 
 
+HEAD_ = rf'(?:(?:a|an|the|that|this) )?(?:({HEADS}) )?'
+OPEN = [   # (regex, groups): who is pointed at / introduced (target), who speaks, who is spoken to
+    (rf'^(?:(?:while |on )?(?:pointing (?:to|towards|at)|looking at|showing|introducing|pointing out to) )'
+     rf'(?:(?:a|an|the) )?(?:(?:photograph|photo|picture|portrait) (?:of )?)?(?:(?:a|an|the) )?(?:({HEADS}) )?({E})?(?: in (?:the |a )?(?:photograph|photo|picture))?'
+     rf' , {HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))? ,? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('th', 't', 'sh', 's', 'ah', 'a')),
+    (rf'^(?:if )?{HEAD_}({E}) (?:introduces|introduced|introducing) {HEAD_}({E})(?: to (?:his|her|my) \w+)? ,? (?:by saying|saying|and says|and said|says|said) ,? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'th', 't')),
+    (rf'^{HEAD_}({E}) (?:points|pointed|pointing) (?:to|at|towards) {HEAD_}({E}) (?:and|,) (?:says|said) ,? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'th', 't')),
+    (rf'^(?:if )?{HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))? ,? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'ah', 'a')),
+]
+EXTRA = [   # sentences after the speech: "if X has no siblings", "X is the only child"
+    (rf'(?:if )?({E}) (?:has no siblings?|has no brothers? or sisters?|is the only child(?: of (?:his|her) parents)?|is an only child)', 'no-sibling'),
+    (rf'(?:if )?({E}) has no brothers?', 'no-brother'),
+    (rf'(?:if )?({E}) has no sisters?', 'no-sister'),
+]
+
+
+def _subject(s, genders):
+    """'the woman @1 at the counter' -> '@1' (gender noted); '@1 's father' and plain phrases unchanged."""
+    m = re.fullmatch(rf'(?:(?:the|this|that) )?(?:({HEADS}) )?({E})(.*)', s)
+    if not m:
+        return s
+    head, e, rest = m.groups()
+    if head:
+        genders[e] = 'male' if head in MALE else 'female' if head in FEMALE else None
+    if rest.startswith(" 's "):
+        return e + rest
+    return e
+
+
+def _question(q, ids):
+    q = q.strip()
+    d = r"(?: (?:(?!'s\b|of\b)[^?])*?)?"   # "playing football", "in the photograph"; never "'s husband"
+    m = (re.fullmatch(rf'(?:then ,? )?how is {HEAD_}({E}|he|she|the person|this person){d} (?:related |connected )?(?:to|with) {HEAD_}({E}){d} \?', q)
+         or re.fullmatch(rf'who is {HEAD_}({E}) (?:to|of) {HEAD_}({E}){d} \?', q))
+    if not m:
+        return None
+    ha, a, hb, b = m.groups()
+    a = ids.get('he') if a in ('he', 'she', 'the person', 'this person') else a
+    return a, b, ha, hb
+
+
 def read(tokens) -> str | None:
     text = ' '.join(tokens)
     if re.search(r'\b(?:means|denotes|implies)\b', text):
         return None
-    m = re.match(rf'^(?:(?:while |on )?(?:pointing (?:to|towards|at)|looking at|showing|introducing|pointing out to) )'
-                 rf'(?:(?:a|an|the) )?(?:(?:photograph|photo|picture|portrait) (?:of )?)?(?:(?:a|an|the) )?(?:({HEADS}) )?({E})?(?: in (?:the |a )?(?:photograph|photo|picture))?'
-                 rf' , (?:(?:a|an|the) )?(?:({HEADS}) )?({E}) {SAY}(?: (?:to )?(?:(?:a|an|the) )?(?:{HEADS} )?({E}))? ,? " (.+?) \.? " (.+)$', text)
-    if not m:
+    text = re.sub(r'^(?:in this type of questions?\b.*? \. |(?:directions?|read the following[^.]*?|answer the questions?[^.]*?) [.:] )+', '', text)
+    for pat, names in OPEN:
+        m = re.match(pat, text)
+        if m:
+            break
+    else:
         return None
-    t_head, target, s_head, speaker, addressee, utter, question = m.groups()
+    g = dict(zip(names, m.groups()[:len(names)]))
+    utter, rest = m.groups()[len(names):]
+    target, speaker, addressee = g.get('t'), g['s'], g.get('a')
     ch = _Chain()
     genders = {}
-    if target is None:   # "pointing to a photograph": the person in it
+    pointed = target is not None or names[0] == 'th'
+    if target is None and pointed:   # "pointing to a photograph": the person in it
         target = ch.new()
-    if t_head:
-        genders[target] = 'male' if t_head in MALE else 'female' if t_head in FEMALE else None
-    if s_head:
-        genders[speaker] = 'male' if s_head in MALE else 'female' if s_head in FEMALE else None
-    who = {'my': speaker, 'i': speaker, 'me': speaker, 'he': target, 'she': target, 'his': target, 'her': target,
-           'him': target, 'this': target}
+    for k, e in (('th', target), ('sh', speaker), ('ah', addressee)):
+        if g.get(k) and e:
+            genders[e] = 'male' if g[k] in MALE else 'female' if g[k] in FEMALE else None
+    who = {'my': speaker, 'i': speaker, 'me': speaker}
+    if target:
+        who.update({'he': target, 'she': target, 'his': target, 'her': target, 'him': target, 'this': target})
+    elif re.search(r'\b(?:he|she|his|her|him)\b', utter):   # nobody pointed at: whose pronoun?
+        return None
     if addressee:
         who.update({'your': addressee, 'you': addressee})
-    for p, g in (('he', 'male'), ('his', 'male'), ('him', 'male'), ('she', 'female'), ('her', 'female')):
-        if re.search(rf'\b{p}\b', utter):
-            if genders.get(target) not in (None, g):
-                return None
-            genders[target] = g
+    if target:
+        for p, gg in (('he', 'male'), ('his', 'male'), ('him', 'male'), ('she', 'female'), ('her', 'female')):
+            if re.search(rf'\b{p}\b', utter):
+                if genders.get(target) not in (None, gg):
+                    return None
+                genders[target] = gg
     if re.search(r"\bmy (?:wife|wife 's)\b", utter):
         genders[speaker] = 'male'
     if re.search(r"\bmy (?:husband|husband 's)\b", utter):
@@ -106,7 +155,7 @@ def read(tokens) -> str | None:
     parts = [p.strip() for p in re.split(r' \. | , and | and (?=i have)', utter) if p.strip()]
     main = None
     for p in parts:
-        if re.fullmatch(r'i have no (?:brother or sister|brothers or sisters|siblings|sibling)|brothers and sisters i have none|i have no brothers? and no sisters?', p):
+        if re.fullmatch(r'i have no (?:brother or sister|brothers or sisters|siblings|sibling)|brothers and sisters i have none|i have no brothers? and no sisters?|i am the only child(?: of my parents)?', p):
             extra.append(f'{speaker} no-sibling')
         elif re.fullmatch(r'i have no brothers?', p):
             extra.append(f'{speaker} no-brother')
@@ -119,17 +168,43 @@ def read(tokens) -> str | None:
     mm = re.fullmatch(r'(.+?) is (.+)', main)
     if not mm:
         return None
-    left = _np(mm.group(1).split(), who, ch)
+    left = _np(_subject(mm.group(1), genders).split(), who, ch)
     if left is None or _np(mm.group(2).split(), who, ch, end=left) is None:
         return None
     if any(isinstance(f, tuple) for f in ch.facts):   # identities between two named nodes: not handled
         return None
-    q = re.fullmatch(rf'how is (?:the )?(?:{HEADS} )?({E}|he|she|the person|this person)(?: in the (?:photograph|photo|picture))? (?:related|connected) (?:to|with) (?:the )?(?:{HEADS} )?({E})(?: in the (?:photograph|photo|picture))? \?', question.strip())
-    if not q:
+    # after the speech: extra facts, then the question ("if X has no siblings , how is ...")
+    from .rules import clause
+    sents = [x.strip() for x in re.split(r' \. | ; ', ' ' + rest.strip() + ' ') if x.strip()]
+    if not sents:
         return None
-    a, b = q.groups()
-    a = target if a in ('he', 'she', 'the person', 'this person') else a
-    if a not in (target, speaker, addressee) or b not in (target, speaker, addressee) or a == b:
+    q = sents[-1]
+    mq = re.fullmatch(r'(if [^,]+) , (.+)', q)
+    if mq:
+        sents[-1:] = [mq.group(1), mq.group(2)]
+        q = mq.group(2)
+    for x in sents[:-1]:
+        got = next((f'{mm2.group(1)} {kind}' for pat, kind in EXTRA for mm2 in [re.fullmatch(pat, x)] if mm2), None)
+        cl = None if got else clause(re.sub(r'^if ', '', x))
+        if got:
+            extra.append(got)
+        elif cl:
+            extra += cl
+        else:
+            return None
+    qq = _question(q, {'he': target})
+    if not qq:
         return None
-    facts = list(ch.facts) + extra + [f'{p} {g}' for p, g in genders.items() if g and p.startswith('@')]
+    a, b, ha, hb = qq
+    facts = list(ch.facts) + extra
+    named = set(re.findall(E, ' '.join(facts))) | {x for x in (target, speaker, addressee) if x}
+    if a is None or a == b or a not in named or b not in named:
+        return None
+    for e, h in ((a, ha), (b, hb)):
+        if h and e.startswith('@'):
+            gg = 'male' if h in MALE else 'female' if h in FEMALE else None
+            if gg and genders.get(e) not in (None, gg):
+                return None
+            genders[e] = gg or genders.get(e)
+    facts += [f'{p} {gg}' for p, gg in genders.items() if gg and p.startswith('@')]
     return ' ; '.join(facts + [f'ask {b} {a}'])
