@@ -8,6 +8,7 @@ sufficiency, and coded "which expression shows..." questions (each option is rea
 """
 from __future__ import annotations
 
+import os
 import re
 
 from .engine import alternatives, claim_holds, pair_holds, solve
@@ -77,7 +78,7 @@ def _relation_option(cands, options, status):
             alts = [option_moves(x) for x in re.split(r'\s+or\s+|/', text)]
             if len(alts) > 1 and all(alts) and all(_same_path([(m, None) for m, _ in x], neutral) for x in alts):
                 return a0, lab
-        if a0 and _labelled(options, CANT):
+        if a0 and _labelled(options, CANT) and not NAMES_DECIDE:
             return a0, _labelled(options, CANT)
     for a in cands:
         if a.get('key') in (None, 'none'):
@@ -144,6 +145,9 @@ def _roman_set(text):
 
 
 # ---------- the answer ----------
+
+NAMES_DECIDE = os.environ.get('KIN_NAMES_DECIDE', '1') == '1'   # a name's gender is taken as given (real exam keys: +8 of 576 dev questions vs preferring 'cannot be determined')
+
 
 def answer(text: str, read, priors: dict | None = None) -> dict:
     """Never raises: a failure comes back as status 'error' with the reason."""
@@ -252,6 +256,8 @@ def _answer_one(p, lf, read, priors):
             return {**out, **res, 'answer': 'cannot be determined', 'option': _labelled(options, CANT)}   # only a gender the text never gives decides
         a, lab = _relation_option(cands, options, status) if options else (cands[0], None)
         if options and not lab:
+            if status in ('conditional', 'ambiguous', 'assumed') and _labelled(options, NONE) and not _relation_option(alternatives(r, qi), options, status)[1]:
+                return {**out, **res, 'answer': cands[0].get('label') or cands[0]['key'], 'option': _labelled(options, NONE)}   # the natural reading is not offered
             if status in ('gender', 'conditional', 'ambiguous') and _labelled(options, CANT):
                 return {**out, **res, 'answer': 'cannot be determined', 'option': _labelled(options, CANT)}
             a, lab = _relation_option(alternatives(r, qi), options, status)

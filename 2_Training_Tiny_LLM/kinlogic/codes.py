@@ -242,9 +242,10 @@ def with_codes(read_model, prep=None):
     """A reader that reads coded questions exactly and passes the rest to `read_model`. prep: the prepare() result of
     the question being answered, so statement options can become claims."""
     def r(batch):
-        from .rules import read as read_rules   # formulaic statement questions, read exactly too
+        from .rules import read as read_rules     # formulaic statement questions, read exactly too
+        from .speech import read as read_speech   # formulaic "pointing to ..., X said ..." questions
         dec = [read(t, prep['options'], prep['ents']) if prep and t is prep['tokens'] else read(t) for t in batch]
-        dec = [d if d is not None else read_rules(t) for d, t in zip(dec, batch)]
+        dec = [d if d is not None else read_rules(t) or read_speech(t) for d, t in zip(dec, batch)]
         need = [t for t, d in zip(batch, dec) if d is None]
         got = iter(read_model(need) if need else [])
         return [d if d is not None else next(got) for d in dec]

@@ -104,10 +104,11 @@ if __name__ == '__main__':
     ap.add_argument('--cpu', action='store_true')
     ap.add_argument('--out', default=None)
     ap.add_argument('--limit', type=int, default=None, help='first N questions only (quick comparisons)')
+    ap.add_argument('--split', default=None, help="only 'dev' or 'test' questions")
     a = ap.parse_args()
     dev = get_device(force_cpu=a.cpu)
     model, vocab = load(a.ckpt, dev)
-    rows = load_real()[:a.limit]
+    rows = [r for r in load_real() if not a.split or split_of(r) == a.split][:a.limit]
     score, misses = run(lambda b: generate(model, vocab, b, dev, k=8), rows)
     print(json.dumps(score, indent=1))
     if a.out:

@@ -53,8 +53,8 @@ G = [
     # ---- gender must stay open ----
     q('g22', 'unisex', 2, 'Shashi and Kiran are siblings. How is Kiran related to Shashi? (a) Brother (b) Sister (c) Cousin (d) Cannot be determined',
       'Shashi sibling Kiran ; ask Shashi Kiran', 'd'),
-    q('g23', 'unisex', 2, 'Rohit and Priya are siblings. How is Priya related to Rohit? (a) Brother (b) Sister (c) Cousin (d) Cannot be determined',
-      'Rohit sibling Priya ; ask Rohit Priya', 'd'),
+    q('g23', 'name', 2, 'Rohit and Priya are siblings. How is Priya related to Rohit? (a) Brother (b) Sister (c) Cousin (d) Cannot be determined',
+      'Rohit sibling Priya ; ask Rohit Priya', 'b'),   # exam keys take a clear name's gender as given (real dev questions, 2026-10-23)
     q('g24', 'unisex', 2, 'P is the child of Q. Q is the father of R. How is P related to R? (a) Brother (b) Sister (c) Cousin (d) Cannot be determined',
       'Q child P ; R father Q ; ask R P', 'd'),
     q('g25', 'unisex', 2, 'Jyoti is a daughter of Prakash. Harsha is the other child of Prakash. How is Harsha related to Jyoti? (a) Brother (b) Sister (c) Cousin (d) Cannot be determined',
