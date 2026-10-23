@@ -206,6 +206,7 @@ class Q:
         self.names = names or Names(rng, style)
         self.refs, self.sentences, self.facts = {}, [], []
         self.gendered, self.descs = set(), []
+        self.profs = {}   # Ref -> profession written in the text
 
     def ref(self, node) -> Ref:
         """The person as a name (or letter) in the text."""
@@ -1107,11 +1108,15 @@ def q_puzzle(rng) -> dict | None:
                               [{'t': 'same' if same else 'opposite', 'x': rx, 'y': by[y]}]))
     if rng.random() < 0.15:   # professions the question never asks about: "Q is a doctor and the father of T"
         profs = rng.sample(['doctor', 'lawyer', 'engineer', 'teacher', 'accountant', 'salesman', 'manager', 'architect'], 3)
+        who, by_surface = set(), {r.surface: r for r in refs}
         for i, (c, f) in enumerate(clues[:3]):
             m = re.match(r'^(\S+) is (the .+)$', c)
-            if m and profs:
+            if m and profs and m.group(1) not in who and m.group(1) in by_surface:   # one profession per person
+                who.add(m.group(1))
                 pr = profs.pop()
-                clues[i] = (rng.choice([f'{m.group(1)} is a {pr} and {m.group(2)}', f'{m.group(1)} is {m.group(2)} and is a {pr}']), f)
+                q.profs[by_surface[m.group(1)]] = pr
+                clues[i] = (rng.choice([f'{m.group(1)} is {an(pr)} and {m.group(2)}', f'{m.group(1)} is {m.group(2)} and is {an(pr)}']),
+                            [{'t': 'prof', 'x': by_surface[m.group(1)], 'p': pr}] + f)
     if rng.random() < 0.5:
         rng.shuffle(clues)
     if not any(w.children(m) and w.spouse(m) < 0 for m in fam.people) and rng.random() < 0.3:   # real puzzles say this a lot
@@ -1139,6 +1144,14 @@ def q_puzzle(rng) -> dict | None:
 
 def _puzzle_question(q: Q, order, by):
     rng, fam, w = q.rng, q.fam, q.fam.w
+    if q.profs and rng.random() < 0.35:   # "Who is the doctor?" / "What is the profession of X?"
+        r, pr = rng.choice(list(q.profs.items()))
+        if rng.random() < 0.5:
+            q.add(rng.choice([f'Who is the {pr}?', f'Who among the following is the {pr}?', f'Who among the following works as {an(pr)}?']),
+                  [{'t': 'who', 'x': None, 'r': 'prof:' + pr, 'side': None}])
+            return {'who': [r.surface]}
+        q.add(rng.choice([f'What is the profession of {r.surface}?', f"What is {poss(r.surface)} profession?"]), [{'t': 'prof?', 'x': r}])
+        return pr
     kind = rng.choice(['ask', 'ask', 'who', 'who', 'count', 'gender', 'pair'])
     x, y = rng.sample(order, 2)
     rx, ry = by[x], by[y]

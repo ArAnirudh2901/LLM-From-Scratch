@@ -20,8 +20,8 @@ GWORD = {'male': 'male', 'man': 'male', 'boy': 'male', 'gentleman': 'male', 'fem
 PLURAL = {'brothers': 'brother', 'sisters': 'sister', 'siblings': 'sibling', 'sons': 'son', 'daughters': 'daughter'}
 
 
-PROFS = {'doctor', 'lawyer', 'engineer', 'teacher', 'professor', 'architect', 'accountant', 'salesman', 'manager', 'clerk', 'pilot',
-         'nurse', 'businessman', 'contractor', 'dentist', 'banker', 'singer', 'dancer', 'housewife', 'student', 'farmer', 'jeweller'}
+from .facts import PROFS as _P
+PROFS = set(_P)
 PROF = rf"({'|'.join(sorted(PROFS))})"
 
 
@@ -164,6 +164,9 @@ def clause(c: str):
                 return None
             out.append(f'{r}s {k}')
         return out if out and len({o.split()[0] for o in out}) == len(out) else None
+    m = re.fullmatch(rf'{E} is (?:a |an |the )?{PROF}', c)   # "X is a doctor"
+    if m:
+        return [f'{m.group(1)} prof {m.group(2)}']
     m = re.fullmatch(rf'{E} is (?:a |the )?single parent', c)   # a parent with no spouse
     if m:
         return [f'{m.group(1)} unmarried']
@@ -268,7 +271,17 @@ ASK = [
 def question(c: str, ch=None):
     c = re.sub(r'^(?:then ,? |so ,? |in terms of relationship ,? )', '', c.strip())
     c = re.sub(r'^how is ([@#]\d+) is ', r'how is \1 ', c)   # "how is X is related to Y"
-    c = re.sub(r'^who among the following is ', 'who is ', c)
+    c = re.sub(r'^who among the following (is|works as) ', r'who \1 ', c)
+    m = re.fullmatch(rf'who (?:is|works as) (?:a |an |the )?{PROF}', c)   # "who is the doctor?"
+    if m:
+        return f'who prof {m.group(1)}'
+    m = re.fullmatch(rf"what is (?:the )?profession of {E}|what is {E} 's profession", c)
+    if m:
+        return f'prof {m.group(1) or m.group(2)}'
+    m = re.fullmatch(rf"who is (?:the )?{PROF} 's {REL}", c)   # "who is the lawyer 's wife?"
+    if m and ch is not None and _rel(m.group(2)) and not _rel(m.group(2)).startswith('only'):
+        k = ch.new()
+        return f'{k} prof {m.group(1)} ; who {k} {_rel(m.group(2))}'
     m = re.fullmatch(rf"how is {E} (?:related|connected) (?:to|with) {E} 's {REL}", c)   # "how is X related to Y 's wife"
     if m and ch is not None and _rel(m.group(3)) and not _rel(m.group(3)).startswith('only'):
         k = ch.new()
@@ -329,11 +342,28 @@ def _part(p: str, ch, depth: int = 0):
             k = ch.new()
             return [f'{y} {_rel(r)} {k}', f'{m.group(1)} spouse {k}']
     m = re.fullmatch(rf'{E} (?:is|,) (?:an? |the )?{PROF}(?: ,)? and (?:is )?(.+)', p) or re.fullmatch(rf'{E} (?:is )?(.+?) and is (?:an? |the )?{PROF}', p)
-    if m:   # "X is a doctor and the father of Y": professions are dropped (read() refuses questions about them)
-        rest = m.group(3) if m.group(2) in PROFS else m.group(2)
+    if m and re.search(r'[@#]\d+ (?:is|has|was) ', m.group(2) if m.group(3) in PROFS else m.group(3)):
+        m = None   # "A has a wife B and C is ... and is an engineer": the profession is C's, read clause by clause
+    if m:   # "X is a doctor and the father of Y"
+        prof, rest = (m.group(2), m.group(3)) if m.group(2) in PROFS else (m.group(3), m.group(2))
         got = _part(f'{m.group(1)} is {rest}' if not rest.startswith(('is ', 'has ')) else f'{m.group(1)} {rest}', ch, depth + 1)
         if got:
-            return got
+            return [f'{m.group(1)} prof {prof}'] + got
+    m = re.fullmatch(rf'{E} ,? the {PROF} ,? (.+)', p)   # "D , the salesman , is married to ..."
+    if m:
+        got = _part(f'{m.group(1)} {m.group(3)}', ch, depth + 1)
+        if got:
+            return [f'{m.group(1)} prof {m.group(2)}'] + got
+    m = re.fullmatch(rf'(?:the )?{PROF} is married to (?:the )?(?:(lady|female|male|gentleman) )?{PROF}', p)   # "the doctor is married to the lawyer"
+    if m:
+        k1, k2 = ch.new(), ch.new()
+        g = {'lady': ['female'], 'female': ['female'], 'male': ['male'], 'gentleman': ['male']}.get(m.group(2) or '', [])
+        return [f'{k1} prof {m.group(1)}', f'{k2} prof {m.group(3)}', f'{k1} spouse {k2}'] + [f'{k2} {x}' for x in g]
+    m = re.fullmatch(rf'{E} is married to (?:the |a )?(?:(lady|female|male|gentleman) )?{PROF}', p)   # "D is married to the lady teacher"
+    if m:
+        k = ch.new()
+        g = {'lady': ['female'], 'female': ['female'], 'male': ['male'], 'gentleman': ['male']}.get(m.group(2) or '', [])
+        return [f'{k} prof {m.group(3)}', f'{m.group(1)} spouse {k}'] + [f'{k} {x}' for x in g]
     m = re.fullmatch(rf"{E} 's {REL} {E} ,? (is .+|has .+)", p)   # "X 's brother Y , is the grandfather of ..."
     if m and _rel(m.group(2)):
         rest = _part(f'{m.group(3)} {m.group(4)}', ch, depth + 1)
@@ -420,8 +450,6 @@ def read(tokens, why=None) -> str | None:
         p = re.sub(r'^\( ?[a-z0-9] ?\) ', '', p)
         p = re.sub(r'^(?:pick|choose|select) the (?:right|correct) (?:choice|option|answer) from the (?:given )?options ,? (?:if )?', '', p)   # "(a) X is ..." clue labels
         if k == len(parts) - 1:
-            if re.search(rf'\b{PROF}s?\b', p):   # a question about professions: not in the fact language
-                return None
             if re.fullmatch(r'(?:then ,? )?which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)', p.strip()):
                 break   # "which of the following statements is true?": the exam layer checks the options
             q = question(p, ch)

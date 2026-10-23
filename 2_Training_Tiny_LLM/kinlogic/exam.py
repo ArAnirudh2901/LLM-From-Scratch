@@ -472,6 +472,12 @@ def _answer_one(p, lf, read, priors):
         g = q['answers'][0]['key']
         lab = _labelled(options, re.compile(rf'^\s*{g}\b', re.I)) if g in ('male', 'female') else _labelled(options, CANT)
         return {**out, **res, 'answer': g if g != 'unknown' else 'cannot be determined', 'option': lab}
+    if t == 'prof?':   # "What is the profession of X?"
+        keys = {a['key'] for a in q['answers']}
+        if len(keys) > 1 or 'unknown' in keys:
+            return {**out, **res, 'answer': 'cannot be determined', 'option': _labelled(options, CANT)}
+        p_ = keys.pop()
+        return {**out, **res, 'answer': p_, 'option': next((l for l, o in options if re.fullmatch(rf'\s*{p_}s?\s*\.?', o, re.I)), None)}
     return {**out, **res, 'answer': q['answers'][0]['key'], 'option': None}
 
 
