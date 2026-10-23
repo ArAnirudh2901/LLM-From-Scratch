@@ -696,7 +696,8 @@ def _closed_family(w, run: _Run):
     anon = next((r for r in w.roots() if not w.named[r] and not w.frame[r] and r not in members), None)
     if anon is None:
         if len(members) <= run.members:
-            yield from _couples(w, run)
+            for w2 in _no_singles(w, run):
+                yield from _couples(w2, run)
         return
     for m in members:
         if not run.tick():
@@ -705,6 +706,40 @@ def _closed_family(w, run: _Run):
         w2.choices.append(('same', anon, m))
         if w2.unify(anon, m) and w2.normalize() and w2.valid():
             yield from _closed_family(w2, run)
+
+
+def _blood(w, a, b) -> bool:
+    """a and b share an ancestor (or one descends from the other): never a couple we invent."""
+    def anc(x):
+        out, todo = set(), [w.find(x)]
+        while todo:
+            y = todo.pop()
+            if y >= 0 and y not in out:
+                out.add(y)
+                todo += [w.father(y), w.mother(y)]
+        return out
+    return bool(anc(a) & anc(b))
+
+
+def _no_singles(w, run: _Run):
+    """'No single parent': a member with a child in the family and no spouse marries another member (the child's other
+    parent first); the final check counts the rest."""
+    if run.singles is None or _singles(w, run) <= run.singles:
+        yield w
+        return
+    ms = _members(w, run)
+    m = next(x for x in ms if {w.find(c) for c in w.children(x)} & set(ms) and w.spouse(x) not in ms)
+    if w.spouse(m) >= 0:   # married to someone outside the family
+        return
+    kids = {w.find(c) for c in w.children(m)}
+    co = [x for x in ms if x != m and kids & {w.find(c) for c in w.children(x)}]
+    for f in co + [x for x in ms if x != m and x not in co]:
+        if w.spouse(f) >= 0 or _blood(w, m, f) or not run.tick():
+            continue
+        w2 = w.clone()
+        w2.choices.append(('couple', m, f))
+        if w2.marry(m, f) and w2.normalize() and w2.valid():
+            yield from _no_singles(w2, run)
 
 
 def _couples(w, run: _Run):

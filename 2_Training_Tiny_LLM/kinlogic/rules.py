@@ -44,16 +44,9 @@ def clause(c: str):
     m = re.fullmatch(rf'{E} is (?:the |a |an |also the )?{REL} (?:of|to) {E}(?: and (?:the |a |an )?{REL} of {E})?', c)
     if m:
         x, r1, y, r2, y2 = m.groups()
-        a = _rel(r1)
-        if a is None:
-            return None
-        out = [f'{y} {a} {x}']
-        if r2:
-            b = _rel(r2)
-            if b is None:
-                return None
-            out.append(f'{y2} {b} {x}')
-        return out
+        a, b = _rel(r1), _rel(r2) if r2 else None
+        if a and (b or not r2):   # else not a relation word ("is married to"): other forms below
+            return [f'{y} {a} {x}'] + ([f'{y2} {b} {x}'] if r2 else [])
     m = re.fullmatch(rf'{E} is (?:the |a |an )?{REL} of {E} and {E}', c)   # "X is the mother of A and B"
     if m and _rel(m.group(2)):
         x, r, y, z = m.groups()
@@ -85,6 +78,29 @@ def clause(c: str):
     m = re.fullmatch(rf'{E} is (unmarried|married)', c)
     if m:
         return [f'{m.group(1)} {m.group(2)}']
+    m = re.fullmatch(rf'{E} has (?:only )?(\w+) (children|sons|daughters)(?: and no (son|daughter|children|sons|daughters))?', c)
+    if m and _num(m.group(2)) is not None and m.group(2) not in ('a', 'an', 'only'):   # "X has only one son and no daughter"
+        one = lambda w: {'children': 'child'}.get(w, PLURAL.get(w, w))
+        return [f'{m.group(1)} has {_num(m.group(2))} {one(m.group(3))}'] + ([f'{m.group(1)} has 0 {one(m.group(4))}'] if m.group(4) else [])
+    m = re.fullmatch(rf'{E} has only (sons|daughters)', c)   # no child of the other kind
+    if m:
+        return [f"{m.group(1)} has 0 {'daughter' if m.group(2) == 'sons' else 'son'}"]
+    m = re.fullmatch(rf'{E} is not married to {E}', c)
+    if m:
+        return [f'{m.group(1)} not spouse {m.group(2)}']
+    m = re.fullmatch(rf'{E} has (?:only )?(\w+) (children|sons|daughters|brothers|sisters|siblings)(?: ,)?(?: named| called| -| :)? ((?:{E} , )*{E} and {E})(?: -)?', c)
+    if m and _num(m.group(2)) is not None:
+        x, n, w, names = m.group(1), _num(m.group(2)), m.group(3), re.findall(E, m.group(4))
+        r = {'children': 'child'}.get(w, PLURAL.get(w))
+        return [f'{x} has {n} {r}'] + [f'{x} {r} {y}' for y in names] if len(names) == n else None
+    m = re.fullmatch(rf'{E} and {E} are (?:a )?(?:married couple|husband and wife|couple)(?: ,)? (?:having|with|who have|and have) (\w+) (children|sons|daughters)(?: ,)?(?: named| called| -| :)? ((?:{E} , )*{E} and {E})', c)
+    if m and _num(m.group(3)) is not None:
+        a, b, n, w = m.group(1), m.group(2), _num(m.group(3)), m.group(4)
+        names = re.findall(E, m.group(5))
+        r = {'children': 'child'}.get(w, PLURAL.get(w))
+        if len(names) != n:
+            return None
+        return [f'{a} spouse {b}', f'{a} has {n} {r}'] + [f'{p} {r} {y}' for y in names for p in (a, b)]
     m = re.fullmatch(rf'{E} is not (?:the )?{REL} of {E}', c)
     if m and _rel(m.group(2)):
         return [f'{m.group(3)} not {_rel(m.group(2))} {m.group(1)}']
@@ -101,7 +117,7 @@ HEAD = [   # closed-family puzzle sentences
 ]
 
 
-INSTRUCTION = re.compile(r'^(?:(?:please )?(?:answer|refer|read|study|consider|go through|carefully read|directions?)\b.*\b(?:questions?|information|data|below|following|passage)\b.*|directions?)$')
+INSTRUCTION = re.compile(r'^(?:in this type of questions?\b.*|(?:please )?(?:answer|refer|read|study|consider|go through|carefully read|directions?)\b.*\b(?:questions?|information|data|below|following|passage)\b.*|directions?)$')
 NUMKEY = [('members', r'(?:members?|persons?|people|individuals)'), ('couples', r'(?:married )?couples?'), ('generations', r'generations?'),
           ('females', r'(?:females?|female members?|ladies|women)'), ('males', r'(?:males?|male members?|men)')]
 FILLER = {'there', 'are', 'is', 'in', 'a', 'the', 'family', 'of', 'with', 'and', 'consisting', 'consists', 'belong', 'belongs',
@@ -113,12 +129,12 @@ def header(c: str):
     """Closed-family facts from a header sentence in any order ("there are nine members in three generations and three
     married couples", "X , Y , ... are six family members"); None if any other word is left."""
     out, rest = [], ' ' + c + ' '
-    if re.search(r'no single (?:parent|person (?:in the family )?is (?:a|the) parent)|no one in the family is a single parent|there are no single parents', rest):
+    if re.search(r'no single (?:parent|person (?:in the family )?is (?:a |the )?parent)|no one in the family is a single parent|there are no single parents', rest):
         out.append('singles 0')
-        rest = re.sub(r'(?:there is )?no single (?:parent|person (?:in the family )?is (?:a|the) parent)(?: in the family)?|no one in the family is a single parent|there are no single parents(?: in the family)?', ' ', rest)
+        rest = re.sub(r'(?:there is )?no single (?:parent|person (?:in the family )?is (?:a |the )?parent)(?: in the family)?|no one in the family is a single parent|there are no single parents(?: in the family)?', ' ', rest)
     for key, pat in NUMKEY:
         m = re.search(rf' (\w+) {pat} ', rest)
-        if m and _num(m.group(1)) is not None:
+        if m and _num(m.group(1)) is not None and m.group(1) not in ('a', 'an', 'only'):   # "X is a female member": a gender
             out.append(f'{key} {_num(m.group(1))}')
             rest = rest[:m.start()] + ' ' + rest[m.end():]
     m = re.search(r' family of (\w+) ', rest)   # "a family of six" (members) / "a family of three generations" handled above
@@ -127,6 +143,22 @@ def header(c: str):
         rest = rest[:m.start()] + ' ' + rest[m.end():]
     left = [w for w in rest.split() if not re.fullmatch(E, w) and w not in FILLER]
     return out if out and not left else None
+
+
+def chain(c: str, ch):
+    """'NP is NP' with possessive / 'of' chains ("X 's son is Y 's brother", "X is the brother of Y 's husband"):
+    each step a fact through an unnamed person #k (ch numbers them across the question)."""
+    from .speech import _np
+    m = re.fullmatch(r'(.+?) is (.+)', c)
+    if not m or re.search(r'\b(?:not|no|any|married|unmarried|who|which|and|or|but|whose)\b', c):
+        return None
+    n0 = len(ch.facts)
+    left = _np(m.group(1).split(), {}, ch)
+    if left is None or _np(m.group(2).split(), {}, ch, end=left) is None or any(isinstance(f, tuple) for f in ch.facts):
+        del ch.facts[n0:]
+        return None
+    out = ch.facts[n0:]
+    return out if out else None
 
 
 def head(c: str):
@@ -183,18 +215,20 @@ def read(tokens, why=None) -> str | None:
     text = re.sub(r'\s*\?\s*$', '', text)
     parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas )|\? ', text) if p.strip()]
     parts = [p for p in parts if not INSTRUCTION.match(p.strip())]   # "answer the questions based on the information given below"
-    facts, ask = [], None
+    from .speech import _Chain
+    facts, ask, ch = [], None, _Chain()
     for k, p in enumerate(parts):
         p = re.sub(r'^(?:and|while|whereas) ', '', p.strip())
-        p = re.sub(r'^\( ?[a-z0-9] ?\) ', '', p)   # "(a) X is ..." clue labels
+        p = re.sub(r'^\( ?[a-z0-9] ?\) ', '', p)
+        p = re.sub(r'^(?:pick|choose|select) the (?:right|correct) (?:choice|option|answer) from the (?:given )?options ,? (?:if )?', '', p)   # "(a) X is ..." clue labels
         if k == len(parts) - 1:
             q = question(p)
             if q:
                 ask = q
                 continue
-        got = clause(p) or head(p) or header(p)
+        got = clause(p) or head(p) or header(p) or chain(p, ch)
         if got is None:
-            sub = re.split(r' , (?:who|which) is ', p)   # "N is the mother-in-law of G , who is the sister of I"
+            sub = re.split(r' ,? (?:who|which) is ', p)   # "N is the mother-in-law of G , who is the sister of I"
             if len(sub) == 2:
                 first = clause(sub[0])
                 last = re.findall(E, sub[0])[-1:] if first else []
@@ -207,5 +241,8 @@ def read(tokens, why=None) -> str | None:
             return None
         facts += got
     if ask is None or not facts:
+        return None
+    named = set(re.findall(E, ' ; '.join(facts)))
+    if any(x not in named for x in re.findall(E, ask)):   # asked about someone no sentence mentions: text lost in the scrape
         return None
     return ' ; '.join(facts + [ask])
