@@ -88,12 +88,24 @@ _BOILER = [re.compile(p, re.I) for p in (
 )]
 
 
+REL_WORD = r'(?:son|daughter|brother|sister|father|mother|husband|wife|uncle|aunt|nephew|niece|cousin|grand(?:son|daughter|father|mother|child))'
+
+
 def normalize(text: str) -> str:
+    if re.search(r'â€|Ã.', text):   # UTF-8 read as Windows-1252 ("A â€“ B"): undo it
+        try:
+            text = text.encode('cp1252').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            text = text.replace('â€“', '-').replace('â€”', '-').replace('â€™', "'").replace('â€˜', "'").replace('â€œ', '"').replace('â€\x9d', '"')
     text = unicodedata.normalize('NFKC', text)
     for a, b in (('‘', "'"), ('’', "'"), ('`', "'"), ('“', '"'), ('”', '"'), ('–', '-'), ('—', '-'),
                  ('−', '-'), ('…', '...'), (' ', ' ')):
         text = text.replace(a, b)
+    text = text.replace('‟', "'").replace('′', "'")
     text = re.sub(r'(\w)\s*-\s*in\s*-\s*law\b', r'\1-in-law', text, flags=re.I)   # "mother – in – law"
+    text = re.sub(r'\b(son|daughter|brother|sister|father|mother)\s+in[\s-]+law\b', r'\1-in-law', text, flags=re.I)   # "daughter in law"
+    text = re.sub(rf'\b(the|is|of|his|her|my|your)({REL_WORD})\b', r'\1 \2', text, flags=re.I)   # "thedaughter" (lost space)
+    text = re.sub(r'\b(is|of)(the)\b', r'\1 \2', text, flags=re.I)
     text = re.sub(r'\bgrand\s+(father|mother|son|daughter|child|children|parent|parents)\b', r'grand\1', text, flags=re.I)
     text = re.sub(r'_{2,}', ' ____ ', text)   # one blank token however long the line
     return re.sub(r'\s+', ' ', text).strip()

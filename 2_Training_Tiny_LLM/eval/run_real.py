@@ -51,7 +51,7 @@ SYNONYMS = [(r'\bgrand[- ]?(uncle|aunt|nephew|niece)\b', r'great-\1'), (r'\bgran
 
 
 def _same_words(t):
-    t = t.lower().strip()
+    t = re.sub(r'\s*\([^)]*\)', '', t.lower()).strip()   # glosses: "maternal uncle (mausa)", "(by marriage)"
     for a, b in SYNONYMS:
         t = re.sub(a, b, t)
     return t

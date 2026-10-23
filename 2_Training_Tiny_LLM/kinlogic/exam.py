@@ -155,6 +155,7 @@ def _roman_set(text):
 # ---------- the answer ----------
 
 NAMES_DECIDE = os.environ.get('KIN_NAMES_DECIDE', '1') == '1'   # a name's gender is taken as given (real exam keys: +8 of 576 dev questions vs preferring 'cannot be determined')
+DESC_UNNAMED = os.environ.get('KIN_DESC_UNNAMED', '1') == '1'   # described people may turn out to be someone named
 SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for every spoken description (dev +1.1, locked test -0.4 with r3); off: exact speech readings only
 
 
@@ -234,9 +235,13 @@ def _answer_one(p, lf, read, priors):
     ents, options = p['ents'], p['options']
     priors = {**name_priors(ents), **(priors or {})}
     names = {e['id']: e['text'] for e in ents}
+    out = {'facts': lf, 'options': options}
+    if DESC_UNNAMED:   # "the boy", "a man": a description, not a name, so facts like "only grandson" may make it someone named
+        desc = {e['id'] for e in ents if e.get('kind') == 'desc'}
+        lf = re.sub(r'@(\d+)\b', lambda m: f'#{900 + int(m.group(1))}' if m.group(0) in desc else m.group(0), lf)
+        names.update({f'#{900 + int(d[1:])}': names[d] for d in desc})
     stmts, _ = parse(lf)
     people = _people(p['tokens'], stmts)
-    out = {'facts': lf, 'options': options}
     low = p['question'].lower()
 
     expr_opts = options and sum(bool(re.search(r'[A-Za-z]\s*[^\w\s,.()\'"]{1,2}\s*[A-Za-z]', o)) for _, o in options) * 2 > len(options)
@@ -320,9 +325,9 @@ def _claims(stmts, options, low, people, priors):
     lab = None
     if 'how many' in low:
         lab = next((l for l, o in options if _number(o) == len(hits)), None)
-    elif options and len(options) == len(verdicts) and all(re.search(r'\b(is|are|was)\b', o) for _, o in options):
-        picked = [l for (l, _), k in zip(options, sorted(verdicts)) if k in hits]   # the options are the statements
-        lab = picked[0] if len(picked) == 1 else None
+    elif options and len(stmt_opts := [(l, o) for l, o in options if re.search(r'\b(is|are|was)\b', o) and not NONE.search(o)]) == len(verdicts):
+        picked = [l for (l, _), k in zip(stmt_opts, sorted(verdicts)) if k in hits]   # the options are the statements
+        lab = picked[0] if len(picked) == 1 else (_labelled(options, NONE) if not picked else None)   # "(d) None of the above"
     else:
         for l, o in options:
             s = _roman_set(o)

@@ -17,9 +17,9 @@ VERB = r'(?:means|implies|denotes|represents|indicates|signifies|stands for|is c
 NOT_OP = {',', ';', '.', ':', '(', ')', '[', ']', 'and', 'or', 'if', 'then', 'is', 'the', 'of', 'a', 'an', 'to', 'in'}
 REL = r'((?:paternal |maternal )?[a-z][a-z-]*)'
 E = r'(@\d+)'
-DEF_FWD = re.compile(rf'{E} (\S+) {E} ,? ?{VERB} {E} is (?:the )?{REL} (?:of )?{E}')
-DEF_MARRIED = re.compile(rf'{E} (\S+) {E} ,? ?{VERB} {E} is married to {E}')
-DEF_POSS = re.compile(rf"{E} (\S+) {E} ,? ?{VERB} {E} is {E} 's {REL}")
+DEF_FWD = re.compile(rf'{E} (\S+) {E} ,? ?{VERB} (?:that )?{E} is (?:the )?{REL} (?:of )?{E}')
+DEF_MARRIED = re.compile(rf'{E} (\S+) {E} ,? ?{VERB} (?:that )?{E} is married to {E}')
+DEF_POSS = re.compile(rf"{E} (\S+) {E} ,? ?{VERB} (?:that )?{E} is {E} 's {REL}")
 ASK = [re.compile(p) for p in (   # each: how is the first person related to the second?
     rf'how is {E} (?:related|connected) (?:to|with) {E}', rf'how {E} is (?:related|connected) (?:to|with) {E}', rf'(?:what|who) is {E} to {E}', rf'{E} is related to {E} as',
     rf'relation(?:ship)? of {E} (?:to|with) {E}', rf'relation(?:ship)? between {E} and {E}',
@@ -188,7 +188,7 @@ def read(tokens, options=None, ents=None) -> str | None:
         runs = runs[-1:]
     runs = runs[0] if isinstance(runs[0][0], list) else runs
     people = set(p for r in runs for p in r[::2])
-    if claims and re.search(r'which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect|derived)\b', text):
+    if claims and re.search(r'which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect|derived)\b|what does [^?]* mean\b|what is meant by', text):
         return ' ; '.join([f for r in runs for f in facts_of(r, defs)] + claims)
     extra = []
     rel_of = re.search(rf"how is {E} 's {REL} related to {E}", text)        # "how is R's husband related to H?"
@@ -238,13 +238,16 @@ def read(tokens, options=None, ents=None) -> str | None:
     return ' ; '.join([f for r in runs for f in facts_of(r, defs)] + extra + genders + [f'ask {x} {y}'])
 
 
-def _fits(lf):
-    """An exact reading no family fits (a description that is someone named, a lost sentence): let the model read."""
+def _fits(lf, ents=None):
+    """An exact reading no family fits (a lost sentence, a reading gone wrong): let the model read. Described people
+    ("the boy") are unnamed here, as in the exam layer, so they may turn out to be someone named."""
     if lf is None:
         return None
     from .engine import solve
     from .facts import parse
-    st, bad = parse(lf)
+    desc = {e['id'] for e in ents or [] if e.get('kind') == 'desc'}
+    lf_check = re.sub(r'@(\d+)\b', lambda m: f'#{900 + int(m.group(1))}' if m.group(0) in desc else m.group(0), lf) if desc else lf
+    st, bad = parse(lf_check)
     return lf if not bad and solve(st, max_steps=20000)['ok'] else None
 
 
@@ -255,7 +258,8 @@ def with_codes(read_model, prep=None):
         from .rules import read as read_rules     # formulaic statement questions, read exactly too
         from .speech import read as read_speech   # formulaic "pointing to ..., X said ..." questions
         dec = [read(t, prep['options'], prep['ents']) if prep and t is prep['tokens'] else read(t) for t in batch]
-        dec = [d if d is not None else _fits(read_rules(t) or read_speech(t)) for d, t in zip(dec, batch)]
+        dec = [d if d is not None else _fits(read_rules(t) or read_speech(t), prep['ents'] if prep and t is prep['tokens'] else None)
+               for d, t in zip(dec, batch)]
         need = [t for t, d in zip(batch, dec) if d is None]
         got = iter(read_model(need) if need else [])
         return [d if d is not None else next(got) for d in dec]
