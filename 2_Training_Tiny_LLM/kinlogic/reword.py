@@ -88,6 +88,28 @@ def call(prompt: str, provider: str, temperature: float = 0.9, json_out: bool = 
     return r['content'][0]['text'].strip()
 
 
+_RESTING = {}   # model -> time it may be used again (free-tier limits are per model)
+
+
+def call_rotating(prompt: str, models: list[str], **kw) -> str:
+    """call() on the first model that is not resting; a 429/503 rests that model for 10 minutes and tries the next."""
+    import time
+    import urllib.error
+    last = None
+    for m in models:
+        if _RESTING.get(m, 0) > time.time():
+            continue
+        try:
+            return call(prompt, 'gemini', model=m, **kw)
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 503, 500):
+                _RESTING[m] = time.time() + 600
+                last = e
+                continue
+            raise
+    raise last or RuntimeError('every model is resting')
+
+
 def clean(text: str) -> str:
     """The rewritten question without a preamble ("Rewritten question:") or wrapping quotes."""
     t = text.strip()

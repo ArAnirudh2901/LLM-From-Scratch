@@ -35,7 +35,7 @@ def page_url(html: str) -> str | None:
 
 def main():
     from eval.sites import CACHE, html_lines
-    from kinlogic.reword import call
+    from kinlogic.reword import call_rotating
     from eval.run_real import load_real
     norm = lambda t: re.sub(r'[^a-z0-9]+', '', str(t).lower())
     _key = lambda t: norm(t)
@@ -43,7 +43,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--domains', required=True, help='file of start URLs; their domains are the ones read')
     ap.add_argument('--out', required=True)
-    ap.add_argument('--model', default=os.environ.get('EXTRACT_MODEL', 'gemini-3.1-flash-lite'))
+    ap.add_argument('--model', default=os.environ.get('EXTRACT_MODEL', 'gemini-3.1-flash-lite,gemini-3.1-flash-lite-preview,gemini-flash-latest'))
     ap.add_argument('--pause', type=float, default=4.0)
     a = ap.parse_args()
     doms = {urllib.parse.urlparse(u).netloc for u in open(a.domains).read().split()}
@@ -65,7 +65,7 @@ def main():
     for i, (u, html) in enumerate(pages):
         text = '\n'.join(html_lines(html))[:14000]
         try:
-            raw = call(PROMPT.format(page=text), 'gemini', temperature=0.0, json_out=True, model=a.model)
+            raw = call_rotating(PROMPT.format(page=text), a.model.split(','), temperature=0.0, json_out=True)
             qs = json.loads(re.search(r'\{.*\}', raw, re.S).group(0)).get('questions', [])
         except Exception as e:
             print(f'{u}: call failed {type(e).__name__}', flush=True)

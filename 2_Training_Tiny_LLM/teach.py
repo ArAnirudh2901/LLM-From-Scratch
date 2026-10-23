@@ -23,7 +23,8 @@ def main():
     from kinlogic.exam import _answer_one
     from kinlogic.kin import KIN
     from kinlogic.prepare import prepare
-    from kinlogic.reword import EXTRACT_BATCH, _numbered, call, to_facts
+    from kinlogic.reword import EXTRACT_BATCH, _numbered, call_rotating, to_facts
+    MODELS = os.environ.get('TEACH_MODELS', 'gemini-3.5-flash,gemini-3.6-flash,gemini-3.7-flash,gemini-3.8-flash,gemini-3-flash-preview').split(',')
     from kinlogic.symgen import as_text, real_keys
     ap = argparse.ArgumentParser()
     ap.add_argument('--questions', nargs='+', required=True)
@@ -50,8 +51,8 @@ def main():
         if not keep:
             continue
         try:
-            raw = call(EXTRACT_BATCH.format(n=len(keep), words=', '.join(sorted(KIN)), questions=_numbered([texts[j] for j in keep])),
-                       'gemini', temperature=0.0, json_out=True, model=os.environ.get('TEACH_MODEL', 'gemini-flash-lite-latest'))
+            raw = call_rotating(EXTRACT_BATCH.format(n=len(keep), words=', '.join(sorted(KIN)), questions=_numbered([texts[j] for j in keep])),
+                                MODELS, temperature=0.0, json_out=True)
             readings = json.loads(re.search(r'\{.*\}', raw, re.S).group(0))['readings']
         except Exception as e:
             st['call failed'] += 1
