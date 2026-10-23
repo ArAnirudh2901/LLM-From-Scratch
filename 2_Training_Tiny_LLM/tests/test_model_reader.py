@@ -42,3 +42,17 @@ def test_make_model_and_size():
     n = sum(p.numel() for p in m.parameters())
     assert 10e6 < n < 14e6, n
     assert type(make_model({'vocab_size': 10, 'block_size': 8, 'n_layer': 1, 'n_head': 1, 'n_embd': 8})).__name__ == 'GPT'
+
+
+def test_looped_reader_cached_decoding_matches_full_pass():
+    import torch
+    from model_reader import Reader
+    torch.manual_seed(0)
+    m = Reader(vocab_size=50, block_size=64, n_layer=2, n_head=2, n_embd=32, n_loop=3, copy=False).eval()
+    idx = torch.randint(5, 50, (2, 12))
+    full = torch.log_softmax(m.head(m.hidden(idx)), -1)
+    plen = torch.tensor([8, 8])
+    cache, lp0 = m.prefill(idx[:, :8], plen)
+    lp = m.step(cache, idx[:, 8], torch.tensor([8, 8]), plen, 8, 1)
+    assert len(cache) == 2 * 3 + 1   # one cache per layer application, plus the copy keys
+    assert torch.allclose(lp0, full[:, 7], atol=1e-5) and torch.allclose(lp, full[:, 8], atol=1e-5)

@@ -242,6 +242,7 @@ def main():
     ap.add_argument('--cpu', action='store_true')
     ap.add_argument('--arch', default='v10', choices=['v10', 'gpt'], help='v10: RoPE, RMSNorm, SwiGLU, copy head')
     ap.add_argument('--n_layer', type=int, default=6)
+    ap.add_argument('--n_loop', type=int, default=None, help='looped reader: run the layer stack this many times (shared weights)')
     ap.add_argument('--ema', type=float, default=0.999, help='decay of the averaged weights used to evaluate and save (0: off)')
     ap.add_argument('--pool', default='data/dataset', help="verified questions from build_dataset.py ('' : generate on the fly)")
     ap.add_argument('--p_deep', default='0.08,0.25', help='share of deep chains at the start and after the ramp')
@@ -263,6 +264,8 @@ def main():
     vocab = Vocab.from_ck(ck) if ck else Vocab.from_ck(pre) if pre else build_vocab(extra=(a.reworded or '').split(',')[0] or None)
     cfg = ck['config'] if ck else {**pre['config'], 'dropout': a.dropout, 'block_size': max(pre['config']['block_size'], a.block)} if pre else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': a.n_layer, 'n_head': 6,
                                    'n_embd': 384, 'dropout': a.dropout, **({'arch': 'v10'} if a.arch == 'v10' else {})}
+    if a.n_loop and not ck:
+        cfg = {**cfg, 'n_loop': a.n_loop}
     model = make_model(cfg).to(device)
     if ck:
         model.load_state_dict(ck.get('raw') or ck['model'])

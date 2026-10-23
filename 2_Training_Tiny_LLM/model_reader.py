@@ -76,13 +76,16 @@ class Reader(nn.Module):
     arch = 'v10'
 
     def __init__(self, vocab_size: int, block_size: int, n_layer: int = 6, n_head: int = 6, n_embd: int = 384,
-                 dropout: float = 0.0, copy: bool = True, d_copy: int = 128, rope_base: float = 10000.0, arch='v10'):
+                 dropout: float = 0.0, copy: bool = True, d_copy: int = 128, rope_base: float = 10000.0, arch='v10',
+                 n_loop: int = 1):
         super().__init__()
+        self.n_loop = n_loop   # looped reader: the whole stack runs n_loop times with shared weights (Universal Transformer)
         self.block_size, self.copy, self.d_copy = block_size, copy, d_copy
         hidden = int(8 * n_embd / 3 + 63) // 64 * 64
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
         self.drop = nn.Dropout(dropout)
         self.blocks = nn.ModuleList([Block(n_embd, n_head, hidden, dropout) for _ in range(n_layer)])
+        self.loop_emb = nn.Parameter(torch.zeros(n_loop, n_embd)) if n_loop > 1 else None   # which pass the shared blocks are on
         self.ln_f = RMSNorm(n_embd)
         if copy:
             self.copy_q = nn.Linear(n_embd, d_copy, bias=False)
@@ -96,7 +99,11 @@ class Reader(nn.Module):
         self.apply(self._init)
         for n, p in self.named_parameters():   # residual projections start small (GPT-2 scaling)
             if n.endswith(('proj.weight', 'w2.weight')):
-                nn.init.normal_(p, 0.0, 0.02 / math.sqrt(2 * n_layer))
+                nn.init.normal_(p, 0.0, 0.02 / math.sqrt(2 * n_layer * n_loop))
+
+    def passes(self):
+        """(block, loop index, starts a loop) for every layer application, in order."""
+        return [(blk, r, i == 0) for r in range(self.n_loop) for i, blk in enumerate(self.blocks)]
 
     @staticmethod
     def _init(m):
@@ -114,7 +121,9 @@ class Reader(nn.Module):
         T = idx.size(1)
         x = self.drop(self.tok_emb(idx))
         cos, sin = self.cos[:T], self.sin[:T]
-        for blk in self.blocks:
+        for blk, r, first in self.passes():
+            if first and self.loop_emb is not None:
+                x = x + self.loop_emb[r]
             x, _ = blk(x, cos, sin)
         return self.ln_f(x)
 
@@ -152,7 +161,9 @@ class Reader(nn.Module):
         x = self.tok_emb(idx)
         cos, sin = self.cos[:P], self.sin[:P]
         cache = []
-        for blk in self.blocks:
+        for blk, r, first in self.passes():
+            if first and self.loop_emb is not None:
+                x = x + self.loop_emb[r]
             x, kv = blk(x, cos, sin)
             cache.append(list(kv))
         h = self.ln_f(x)
@@ -178,7 +189,9 @@ class Reader(nn.Module):
         cos, sin = self.cos[p][:, None, None, :], self.sin[p][:, None, None, :]
         mask = torch.cat([torch.arange(P, device=tok.device)[None, :] < plen[:, None],
                           torch.ones(len(tok), G, dtype=torch.bool, device=tok.device)], 1)[:, None, None, :]
-        for li, blk in enumerate(self.blocks):
+        for li, (blk, r, first) in enumerate(self.passes()):
+            if first and self.loop_emb is not None:
+                x = x + self.loop_emb[r]
             q, k, v = blk.attn.heads(blk.ln1(x), cos, sin)
             cache[li][0] = torch.cat([cache[li][0], k], 2)
             cache[li][1] = torch.cat([cache[li][1], v], 2)
