@@ -57,7 +57,7 @@ def clause(c: str):
         x, y, r = (g[0], g[1], g[2]) if c.split()[1] == 'is' else (g[2], g[0], g[1])
         a = _rel(r)
         return [f'{y} {a} {x}'] if a else None
-    m = re.fullmatch(rf'{E} has (a |an |only one |one )?{REL} (?:named |called |, )?{E}', c)
+    m = re.fullmatch(rf'{E} has (a |an |only one |one )?{REL} (?:, )?(?:named |called )?{E}', c)
     if m and _rel(m.group(3)) and not _rel(m.group(3)).startswith('only'):
         y, det, r, x = m.groups()
         base = _rel(r)
@@ -93,9 +93,9 @@ def clause(c: str):
     m = re.fullmatch(rf'{E} is (?:the |a |an )?(unmarried|married) {REL} of {E}', c)
     if m and _rel(m.group(3)):
         return [f'{m.group(4)} {_rel(m.group(3))} {m.group(1)}', f'{m.group(1)} {m.group(2)}']
-    m = re.fullmatch(rf'{E} has (?:only )?(\w+) (children|sons|daughters)(?: and no (son|daughter|children|sons|daughters))?', c)
+    m = re.fullmatch(rf'{E} has (?:only )?(\w+) (child|children|son|sons|daughter|daughters)(?: and no (son|daughter|children|sons|daughters))?', c)
     if m and _num(m.group(2)) is not None and m.group(2) not in ('a', 'an', 'only'):   # "X has only one son and no daughter"
-        one = lambda w: {'children': 'child'}.get(w, PLURAL.get(w, w))
+        one = lambda w: {'children': 'child', 'child': 'child'}.get(w, PLURAL.get(w, w))
         return [f'{m.group(1)} has {_num(m.group(2))} {one(m.group(3))}'] + ([f'{m.group(1)} has 0 {one(m.group(4))}'] if m.group(4) else [])
     m = re.fullmatch(rf'{E} has only (sons|daughters)', c)   # no child of the other kind
     if m:
@@ -203,8 +203,12 @@ ASK = [
 ]
 
 
-def question(c: str):
-    c = re.sub(r'^(?:then ,? |so ,? )', '', c.strip())
+def question(c: str, ch=None):
+    c = re.sub(r'^(?:then ,? |so ,? |in terms of relationship ,? )', '', c.strip())
+    m = re.fullmatch(rf"how is {E} 's {REL} (?:related|connected) (?:to|with) {E}", c)   # someone unnamed is asked about
+    if m and ch is not None and _rel(m.group(2)) and not _rel(m.group(2)).startswith('only'):
+        k = ch.new()
+        return f'{m.group(1)} {_rel(m.group(2))} {k} ; ask {m.group(3)} {k}'
     for pat, f in ASK:
         m = re.fullmatch(pat, c)
         if m:
@@ -229,6 +233,37 @@ def _part(p: str, ch, depth: int = 0):
     got = clause(p) or head(p) or header(p) or chain(p, ch)
     if got or depth > 6:
         return got
+    m = re.fullmatch(rf'{E} has (?:a|an) {REL}', p)   # "X has a daughter": someone unnamed
+    if m and _rel(m.group(2)) and not _rel(m.group(2)).startswith('only'):
+        return [f'{m.group(1)} {_rel(m.group(2))} {ch.new()}']
+    m = re.fullmatch(rf"{E} 's {REL} {E} ,? (is .+|has .+)", p)   # "X 's brother Y , is the grandfather of ..."
+    if m and _rel(m.group(2)):
+        rest = _part(f'{m.group(3)} {m.group(4)}', ch, depth + 1)
+        if rest:
+            return [f'{m.group(1)} {_rel(m.group(2))} {m.group(3)}'] + rest
+    m = re.fullmatch(r"(.+ 's .+?) is (.+)", p)   # "X 's mother is sister of Y and daughter of Z"
+    if m and not re.search(r'\b(?:who|which|not)\b', p):
+        from .speech import _np
+        n0 = len(ch.facts)
+        node = _np(m.group(1).split(), {}, ch)
+        if node is not None and not any(isinstance(f, tuple) for f in ch.facts):
+            got = clause(f'{node} is {m.group(2)}')
+            if got:
+                made = ch.facts[n0:]
+                del ch.facts[n0:]
+                return made + got
+        del ch.facts[n0:]
+    pieces = re.split(r' and (?=[@#]\d+ (?:is|has|was) )', p)   # "A is the mother of B and C is the son of D"
+    if len(pieces) > 1:
+        out = []
+        for x in pieces:
+            got = _part(x, ch, depth + 1)
+            if not got:
+                out = None
+                break
+            out += got
+        if out:
+            return out
     m = re.match(r'^(.*?)(?: ,)? (?:who|which) (.+)$', p)
     if m:
         left, right = m.group(1).strip(), m.group(2).strip()
@@ -276,6 +311,7 @@ def read(tokens, why=None) -> str | None:
         return None   # coded questions (definitions, or an expression whose definitions were cut off): kinlogic/codes.py
     text = re.sub(r'\s*\?\s*$', '', text)
     text = re.sub(r"\b(\w+)(?:-| )in(?:-| )law\b", r'\1-in-law', text)
+    text = re.sub(r" [‟’′`] s\b", " 's", text)
     text = re.sub(r"\b(does|do|is|has) n ' t\b|\b(does|do|is|has)n ' t\b", lambda m: (m.group(1) or m.group(2)) + ' not', text)
     parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas )|\? ', text) if p.strip()]
     parts = [p for p in parts if not INSTRUCTION.match(p.strip())]   # "answer the questions based on the information given below"
@@ -286,7 +322,7 @@ def read(tokens, why=None) -> str | None:
         p = re.sub(r'^\( ?[a-z0-9] ?\) ', '', p)
         p = re.sub(r'^(?:pick|choose|select) the (?:right|correct) (?:choice|option|answer) from the (?:given )?options ,? (?:if )?', '', p)   # "(a) X is ..." clue labels
         if k == len(parts) - 1:
-            q = question(p)
+            q = question(p, ch)
             if q:
                 ask = q
                 continue
@@ -299,6 +335,6 @@ def read(tokens, why=None) -> str | None:
     if ask is None or not facts:
         return None
     named = set(re.findall(E, ' ; '.join(facts)))
-    if any(x not in named for x in re.findall(E, ask)):   # asked about someone no sentence mentions: text lost in the scrape
+    if any(x not in named for x in re.findall(r'@\d+', ask)):   # asked about someone no sentence mentions: text lost in the scrape
         return None
     return ' ; '.join(facts + [ask])

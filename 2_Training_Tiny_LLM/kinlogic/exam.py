@@ -80,6 +80,14 @@ def _relation_option(cands, options, status):
                 return a0, lab
         if a0 and _labelled(options, CANT) and not NAMES_DECIDE:
             return a0, _labelled(options, CANT)
+    real = [a for a in cands if a.get('key') not in (None, 'none') and a.get('moves')]
+    if status in ('conditional', 'ambiguous', 'gender', 'side') and len(real) > 1:   # "Grandfather or Grandmother" names every reading
+        for lab, text in options:
+            alts = [option_moves(x) for x in re.split(r'\s+or\s+|/', text)]
+            if len(alts) > 1 and all(alts):
+                paths = [[(m, g) for m, g, _ in a['moves']] for a in real]
+                if all(any(_same_path(x, pth) for x in alts) for pth in paths) and all(any(_same_path(x, pth) for pth in paths) for x in alts):
+                    return real[0], lab
     for a in cands:
         if a.get('key') in (None, 'none'):
             continue
