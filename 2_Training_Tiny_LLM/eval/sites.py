@@ -474,7 +474,21 @@ def main():
     ap.add_argument('--sites', default=','.join(SITES))
     ap.add_argument('--max-pages', type=int, default=400)
     ap.add_argument('--offline', action='store_true', help='re-parse cached pages only')
+    ap.add_argument('--urls', default=None, help='file of start pages on further sites (one per line): a training crawl')
+    ap.add_argument('--out', default=None, help='output folder (a training crawl must not write into the evaluation set)')
     a = ap.parse_args()
+    global OUT
+    if a.urls:   # one generic site per domain: its start pages plus pages on the same topic it links to
+        import urllib.parse
+        assert a.out and Path(a.out).resolve() != OUT.resolve(), 'a training crawl needs its own --out'
+        by = collections.defaultdict(list)
+        for u in open(a.urls).read().split():
+            by[urllib.parse.urlparse(u).netloc].append(u)
+        for dom, us in by.items():
+            SITES[dom] = dict(start=us, follow=rf'{re.escape(dom)}/[^?#]*(?:blood|relation|family|kinship)[^?#]*$', max_pages=a.max_pages)
+        a.sites = ','.join(by)
+    if a.out:
+        OUT = Path(a.out)
     OUT.mkdir(parents=True, exist_ok=True)
     names = a.sites.split(',')
     report = json.load(open(OUT / 'report.json')) if (OUT / 'report.json').exists() else {}
