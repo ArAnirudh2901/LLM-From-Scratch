@@ -101,6 +101,34 @@ HEAD = [   # closed-family puzzle sentences
 ]
 
 
+INSTRUCTION = re.compile(r'^(?:(?:please )?(?:answer|refer|read|study|consider|go through|carefully read|directions?)\b.*\b(?:questions?|information|data|below|following|passage)\b.*|directions?)$')
+NUMKEY = [('members', r'(?:members?|persons?|people|individuals)'), ('couples', r'(?:married )?couples?'), ('generations', r'generations?'),
+          ('females', r'(?:females?|female members?|ladies|women)'), ('males', r'(?:males?|male members?|men)')]
+FILLER = {'there', 'are', 'is', 'in', 'a', 'the', 'family', 'of', 'with', 'and', 'consisting', 'consists', 'belong', 'belongs',
+          'to', 'which', 'has', 'have', 'only', 'total', 'members', 'member', 'persons', 'person', 'people', 'it', ',', '-', 'all',
+          'from', 'this', 'that', 'comprising', 'comprises', 'includes', 'including', 'family members'}
+
+
+def header(c: str):
+    """Closed-family facts from a header sentence in any order ("there are nine members in three generations and three
+    married couples", "X , Y , ... are six family members"); None if any other word is left."""
+    out, rest = [], ' ' + c + ' '
+    if re.search(r'no single (?:parent|person (?:in the family )?is (?:a|the) parent)|no one in the family is a single parent|there are no single parents', rest):
+        out.append('singles 0')
+        rest = re.sub(r'(?:there is )?no single (?:parent|person (?:in the family )?is (?:a|the) parent)(?: in the family)?|no one in the family is a single parent|there are no single parents(?: in the family)?', ' ', rest)
+    for key, pat in NUMKEY:
+        m = re.search(rf' (\w+) {pat} ', rest)
+        if m and _num(m.group(1)) is not None:
+            out.append(f'{key} {_num(m.group(1))}')
+            rest = rest[:m.start()] + ' ' + rest[m.end():]
+    m = re.search(r' family of (\w+) ', rest)   # "a family of six" (members) / "a family of three generations" handled above
+    if m and _num(m.group(1)) is not None and not any(o.startswith('members') for o in out):
+        out.append(f'members {_num(m.group(1))}')
+        rest = rest[:m.start()] + ' ' + rest[m.end():]
+    left = [w for w in rest.split() if not re.fullmatch(E, w) and w not in FILLER]
+    return out if out and not left else None
+
+
 def head(c: str):
     for pat, keys in HEAD:
         m = re.fullmatch(pat, c)
@@ -146,13 +174,15 @@ def question(c: str):
     return None
 
 
-def read(tokens) -> str | None:
-    """Facts for a formulaic question, or None unless every sentence is understood."""
+def read(tokens, why=None) -> str | None:
+    """Facts for a formulaic question, or None unless every sentence is understood. why: a list that receives the
+    first clause not understood (diagnostics)."""
     text = ' '.join(tokens)
     if re.search(r'\b(?:means|denotes|implies|indicates|represents)\b', text) or re.search(r'@\d+ [^\w\s\'".,?;:()] @\d+', text):
         return None   # coded questions (definitions, or an expression whose definitions were cut off): kinlogic/codes.py
     text = re.sub(r'\s*\?\s*$', '', text)
-    parts = [p for p in re.split(r' [.;] | , (?=and |while |whereas )|\? ', text) if p.strip()]
+    parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas )|\? ', text) if p.strip()]
+    parts = [p for p in parts if not INSTRUCTION.match(p.strip())]   # "answer the questions based on the information given below"
     facts, ask = [], None
     for k, p in enumerate(parts):
         p = re.sub(r'^(?:and|while|whereas) ', '', p.strip())
@@ -162,7 +192,7 @@ def read(tokens) -> str | None:
             if q:
                 ask = q
                 continue
-        got = clause(p) or head(p)
+        got = clause(p) or head(p) or header(p)
         if got is None:
             sub = re.split(r' , (?:who|which) is ', p)   # "N is the mother-in-law of G , who is the sister of I"
             if len(sub) == 2:
@@ -172,6 +202,8 @@ def read(tokens) -> str | None:
                 if first and second:
                     facts += first + second
                     continue
+            if why is not None:
+                why.append(p)
             return None
         facts += got
     if ask is None or not facts:
