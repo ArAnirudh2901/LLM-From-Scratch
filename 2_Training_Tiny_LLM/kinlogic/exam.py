@@ -147,7 +147,7 @@ def _roman_set(text):
 # ---------- the answer ----------
 
 NAMES_DECIDE = os.environ.get('KIN_NAMES_DECIDE', '1') == '1'   # a name's gender is taken as given (real exam keys: +8 of 576 dev questions vs preferring 'cannot be determined')
-SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for spoken descriptions: dev +1.1, locked test -0.4 with r3; off until a better reader
+SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for every spoken description (dev +1.1, locked test -0.4 with r3); off: exact speech readings only
 
 
 def answer(text: str, read, priors: dict | None = None) -> dict:
@@ -228,7 +228,10 @@ def _answer_one(p, lf, read, priors):
     if any(s.get('part') for s in stmts):
         return {**out, **_sufficiency(stmts, options, people, priors)}
     spoken = '"' in p['tokens'] and re.search(r'\b(?:said|says|say|told|tells|introduc\w*|pointing|points?)\b', ' '.join(p['tokens']))
-    r = solve(stmts, people=people, priors=priors, smallest=bool(spoken) and SMALLEST)
+    if spoken and not SMALLEST:   # the convention only on readings the exact speech reader wrote (model misreadings: off)
+        from .speech import read as read_speech
+        spoken = read_speech(p['tokens']) == lf
+    r = solve(stmts, people=people, priors=priors, smallest=bool(spoken))
     if not r['questions']:
         return {**out, 'answer': 'no question found', 'option': None, 'status': 'none', 'explanation': ''}
     if not r['ok']:

@@ -932,6 +932,9 @@ def _assume(w: World, priors: dict, ids: dict):
     return w2, assumed, against
 
 
+CLOSED_FEWEST = True
+
+
 def solve(stmts: list[dict], label=lambda e: e, asks=(), parts=None, people=(), priors=None, max_steps: int = 20000,
           max_families: int = 2000, smallest: bool = False) -> dict:
     """Solves parsed fact statements (facts.parse).
@@ -1001,6 +1004,12 @@ def solve(stmts: list[dict], label=lambda e: e, asks=(), parts=None, people=(), 
         if len(worlds) >= max_families:
             run.cut = True
             break
+    if run.members is not None and worlds and CLOSED_FEWEST:   # a closed family: members marry members where they can
+        def outside_spouses(w):
+            ms = {w.find(m) for m in _members(w, run)}
+            return sum(1 for x in w.roots() if x not in ms and w.spouse(x) >= 0 and w.find(w.spouse(x)) in ms)
+        least = min(outside_spouses(w) for w in worlds)
+        worlds = [w for w in worlds if outside_spouses(w) == least]
     if smallest and worlds:
         asked = [q for q in questions if q['t'] == 'ask']
         small = _smallest(worlds, run, facts, priors, keep=[e for q in asked for e in (q['x'], q['y'])])
