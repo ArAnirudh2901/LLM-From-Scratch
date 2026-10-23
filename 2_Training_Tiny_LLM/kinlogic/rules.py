@@ -11,7 +11,7 @@ import re
 
 from .kin import KIN
 
-E = r'(@\d+)'
+E = r'([@#]\d+)'   # #k: an unnamed person ("the one, who ...")
 REL = r'((?:only )?(?:paternal |maternal )?(?:elder |younger |eldest |youngest )?[a-z][a-z-]*)'
 NUM = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11,
        'twelve': 12, 'one': 1, 'a': 1, 'an': 1, 'only': 1}
@@ -75,9 +75,24 @@ def clause(c: str):
     m = re.fullmatch(rf'{E} is (?:a |an )?(male|female|man|woman|boy|girl|lady|gentleman)(?: member)?', c)
     if m:
         return [f'{m.group(1)} {GWORD[m.group(2)]}']
-    m = re.fullmatch(rf'{E} is (unmarried|married)', c)
+    m = re.fullmatch(rf'{E} is (?:an? )?(unmarried|married)(?: (?:member|person))?(?: (?:of|in) the family)?', c)
     if m:
         return [f'{m.group(1)} {m.group(2)}']
+    m = re.fullmatch(rf'{E} is (?:a |the )?(male|female) (?:member|person)(?: (?:of|in) the family)?', c)
+    if m:
+        return [f'{m.group(1)} {m.group(2)}']
+    m = re.fullmatch(rf'{E} is not (?:a |the )?(male|female)(?: (?:member|person))?(?: (?:of|in) the family)?', c)
+    if m:
+        return [f"{m.group(1)} {'female' if m.group(2) == 'male' else 'male'}"]
+    m = re.fullmatch(rf'{E} (?:does not have any|has no|does not have an?) (brother|sister|sibling|child)s?', c) or re.fullmatch(rf'{E} (?:does not have any|has no) (children)', c)
+    if m:
+        return [f"{m.group(1)} no-{ {'children': 'child'}.get(m.group(2), m.group(2)) }"]
+    m = re.fullmatch(rf'(?:the )?genders? of {E} and {E} (?:is|are) (?:the )?(same|different|opposite)', c) or re.fullmatch(rf'{E} and {E} are (?:of )?(?:the )?(same|different|opposite) genders?', c)
+    if m:
+        return [f"{m.group(1)} {'same' if m.group(3) == 'same' else 'opposite'} {m.group(2)}"]
+    m = re.fullmatch(rf'{E} is (?:the |a |an )?(unmarried|married) {REL} of {E}', c)
+    if m and _rel(m.group(3)):
+        return [f'{m.group(4)} {_rel(m.group(3))} {m.group(1)}', f'{m.group(1)} {m.group(2)}']
     m = re.fullmatch(rf'{E} has (?:only )?(\w+) (children|sons|daughters)(?: and no (son|daughter|children|sons|daughters))?', c)
     if m and _num(m.group(2)) is not None and m.group(2) not in ('a', 'an', 'only'):   # "X has only one son and no daughter"
         one = lambda w: {'children': 'child'}.get(w, PLURAL.get(w, w))
@@ -206,6 +221,53 @@ def question(c: str):
     return None
 
 
+def _part(p: str, ch, depth: int = 0):
+    """Facts for one sentence: a known form, or forms joined by commas and who-clauses ("X , who is the father of Y ,
+    is married to Z", "the one , who is married to X is the father of Y", "A is the brother of B , C is the wife of D ,
+    who is the only son of E"); None unless every piece is understood."""
+    p = p.strip()
+    got = clause(p) or head(p) or header(p) or chain(p, ch)
+    if got or depth > 6:
+        return got
+    m = re.match(r'^(.*?)(?: ,)? (?:who|which) (.+)$', p)
+    if m:
+        left, right = m.group(1).strip(), m.group(2).strip()
+        anon = re.search(r'\bthe (?:one|person)$', left)
+        if anon:
+            subj = ch.new()
+            left = left[:anon.start()] + subj
+        else:
+            ents = re.findall(E, left)
+            if not ents or not re.search(rf'{E}$', left):
+                return None
+            subj = ents[-1]
+        cuts = [mm.start() for mm in re.finditer(r' , | (?=is |has |does )', right)]
+        for i in [None] + cuts:   # who-predicate alone, or followed by the rest of the main sentence
+            pred, rest = (right, None) if i is None else (right[:i], right[i:].lstrip(' ,').strip())
+            a = _part(f'{subj} {pred}', ch, depth + 1)
+            if not a:
+                continue
+            if rest is None:
+                b = _part(left, ch, depth + 1) if left != subj else []
+            elif left == subj:
+                b = _part(f'{subj} {rest}', ch, depth + 1)
+            else:
+                b = _part(f'{left} , {rest}', ch, depth + 1) or _part(f'{left} {rest}', ch, depth + 1)
+            if b is not None and (b or left == subj):
+                return b + a
+        return None
+    pieces = p.split(' , ')
+    if len(pieces) > 1:
+        out = []
+        for x in pieces:
+            got = _part(x, ch, depth + 1)
+            if not got:
+                return None
+            out += got
+        return out
+    return None
+
+
 def read(tokens, why=None) -> str | None:
     """Facts for a formulaic question, or None unless every sentence is understood. why: a list that receives the
     first clause not understood (diagnostics)."""
@@ -213,6 +275,8 @@ def read(tokens, why=None) -> str | None:
     if re.search(r'\b(?:means|denotes|implies|indicates|represents)\b', text) or re.search(r'@\d+ [^\w\s\'".,?;:()] @\d+', text):
         return None   # coded questions (definitions, or an expression whose definitions were cut off): kinlogic/codes.py
     text = re.sub(r'\s*\?\s*$', '', text)
+    text = re.sub(r"\b(\w+)(?:-| )in(?:-| )law\b", r'\1-in-law', text)
+    text = re.sub(r"\b(does|do|is|has) n ' t\b|\b(does|do|is|has)n ' t\b", lambda m: (m.group(1) or m.group(2)) + ' not', text)
     parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas )|\? ', text) if p.strip()]
     parts = [p for p in parts if not INSTRUCTION.match(p.strip())]   # "answer the questions based on the information given below"
     from .speech import _Chain
@@ -226,16 +290,8 @@ def read(tokens, why=None) -> str | None:
             if q:
                 ask = q
                 continue
-        got = clause(p) or head(p) or header(p) or chain(p, ch)
+        got = _part(p, ch)
         if got is None:
-            sub = re.split(r' ,? (?:who|which) is ', p)   # "N is the mother-in-law of G , who is the sister of I"
-            if len(sub) == 2:
-                first = clause(sub[0])
-                last = re.findall(E, sub[0])[-1:] if first else []
-                second = clause(f'{last[0]} is {sub[1]}') if last else None
-                if first and second:
-                    facts += first + second
-                    continue
             if why is not None:
                 why.append(p)
             return None
