@@ -155,6 +155,7 @@ def _roman_set(text):
 # ---------- the answer ----------
 
 NAMES_DECIDE = os.environ.get('KIN_NAMES_DECIDE', '1') == '1'   # a name's gender is taken as given (real exam keys: +8 of 576 dev questions vs preferring 'cannot be determined')
+NEAREST = os.environ.get('KIN_NEAREST', '1') == '1'   # still nothing: the closest option by generation, gender and kind
 INVERSE = os.environ.get('KIN_INVERSE', '1') == '1'   # no option names the answer but one names the reverse relation: take it
 RELAX = os.environ.get('KIN_RELAX', '1') == '1'   # a self-contradictory question still gets the answer its keys expect
 DESC_UNNAMED = os.environ.get('KIN_DESC_UNNAMED', '1') == '1'   # described people may turn out to be someone named
@@ -231,6 +232,32 @@ def _people(tokens, stmts):
             if s.get(k, '').startswith('@') and s[k] not in out:
                 out.append(s[k])
     return out
+
+
+def _shape(mv):
+    """(generations up, gender, by marriage, collateral) of a move path."""
+    ms = [m[0] for m in mv]
+    return ms.count('U') - ms.count('D'), mv[-1][1], 'S' in ms, any(m == 'U' and 'D' in ms[i + 1:] for i, m in enumerate(ms))
+
+
+def _nearest_option(a, options):
+    """The one option with the answer's generation and gender that best matches its kind (blood or marriage,
+    direct or collateral); None unless exactly one is best."""
+    if not a.get('moves'):
+        return None
+    gen, g, aff, coll = _shape(a['moves'])
+    g = a.get('gender') or g
+    scored = []
+    for lab, text in options:
+        mv = option_moves(text)
+        if not mv:
+            continue
+        ogen, og, oaff, ocoll = _shape(mv)
+        if ogen == gen and (not g or not og or g == og):
+            scored.append(((oaff == aff) + (ocoll == coll), lab))
+    top = max((sc for sc, _ in scored), default=None)
+    best = [lab for sc, lab in scored if sc == top]
+    return best[0] if len(best) == 1 else None
 
 
 def _inverse(stmts, people, priors, smallest):
@@ -337,6 +364,10 @@ def _answer_one(p, lf, read, priors):
                 if lab:
                     res['explanation'] += '\n[NOTE]: No option names this relation; the options name the reverse one.'
                     return {**out, **res, 'answer': a.get('label') or a['key'], 'option': lab}
+                lab = _nearest_option(cands[0], options) if NEAREST else None
+                if lab:   # "father's cousin" with options Sister / Mother / Mother-in-law / Aunt: the setter's loose "Aunt"
+                    res['explanation'] += '\n[NOTE]: No option names this relation exactly; the closest one (same generation, gender and kind) is chosen.'
+                    return {**out, **res, 'answer': cands[0].get('label') or cands[0]['key'], 'option': lab}
         a = a or cands[0]
         label = a.get('label') or a['key']
         text_ans = q.get('neutral') or label if q['status'] == 'gender' and a is cands[0] else label
