@@ -73,12 +73,11 @@ def _step(base, rel, ch, end=None):
 
 HEAD_ = rf'(?:(?:a|an|the|that|this) )?(?:({HEADS}) )?'
 OPEN = [   # (regex, groups): who is pointed at / introduced (target), who speaks, who is spoken to
-    (rf'^(?:(?:while |on )?(?:pointing (?:to|towards|at)|looking at|showing|introducing|pointing out to) )'
-     rf'(?:(?:a|an|the) )?(?:(?:photograph|photo|picture|portrait) (?:of )?)?(?:(?:a|an|the) )?(?:({HEADS}) )?({E})?(?: in (?:the |a )?(?:photograph|photo|picture))?'
-     rf' , {HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))? ,? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('th', 't', 'sh', 's', 'ah', 'a')),
-    (rf'^(?:if )?{HEAD_}({E}) (?:introduces|introduced|introducing) {HEAD_}({E})(?: to (?:his|her|my) \w+)? ,? (?:by saying|saying|and says|and said|says|said) ,? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'th', 't')),
-    (rf'^{HEAD_}({E}) (?:points|pointed|pointing) (?:to|at|towards) {HEAD_}({E}) (?:and|,) (?:says|said) ,? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'th', 't')),
-    (rf'^(?:if )?{HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))? ,? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'ah', 'a')),
+    (rf'^(?:while |on )?(?:pointing (?:out )?(?:to|towards|at)|looking at|showing|introducing)(?: (.*?))?(?: ,)? {HEAD_}({E}) {SAY}'
+     rf'(?: (?:to )?{HEAD_}({E}))?(?: ,)? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('tdesc', 'sh', 's', 'ah', 'a')),
+    (rf'^(?:if )?{HEAD_}({E}) (?:introduces|introduced|introducing) {HEAD_}({E})(?: to (?:his|her|my) \w+)?(?: ,)? (?:by saying|saying|and says|and said|says|said)(?: ,)? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'th', 't')),
+    (rf'^{HEAD_}({E}) (?:points|pointed|pointing) (?:to|at|towards) {HEAD_}({E}) (?:and|,) (?:says|said)(?: ,)? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'th', 't')),
+    (rf'^(?:if )?{HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))?(?: ,)? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'ah', 'a')),
 ]
 EXTRA = [   # sentences after the speech: "if X has no siblings", "X is the only child"
     (rf'(?:if )?({E}) (?:has no siblings?|has no brothers? or sisters?|is the only child(?: of (?:his|her) parents)?|is an only child)', 'no-sibling'),
@@ -102,6 +101,7 @@ def _subject(s, genders):
 
 def _question(q, ids):
     q = q.strip()
+    q = re.sub(rf'\b(?:the|that|this) (?:{HEADS}) (?:in|on) the (?:photograph|photo|picture|portrait|stage)\b(?! ?@)', 'he', q)
     d = r"(?: (?:(?!'s\b|of\b)[^?])*?)?"   # "playing football", "in the photograph"; never "'s husband"
     m = (re.fullmatch(rf'(?:then ,? )?how is {HEAD_}({E}|he|she|the person|this person){d} (?:related |connected )?(?:to|with) {HEAD_}({E}){d} \?', q)
          or re.fullmatch(rf'who is {HEAD_}({E}) (?:to|of) {HEAD_}({E}){d} \?', q))
@@ -112,7 +112,9 @@ def _question(q, ids):
     return a, b, ha, hb
 
 
-def read(tokens) -> str | None:
+def read(tokens, why=None) -> str | None:
+    """why: a list that receives the stage that failed (diagnostics)."""
+    fail = lambda stage, x: (why.append(f'{stage}: {x}') if why is not None else None)
     text = ' '.join(tokens)
     if re.search(r'\b(?:means|denotes|implies)\b', text):
         return None
@@ -122,9 +124,18 @@ def read(tokens) -> str | None:
         if m:
             break
     else:
-        return None
+        return fail('opening', text[:100])
     g = dict(zip(names, m.groups()[:len(names)]))
     utter, rest = m.groups()[len(names):]
+    if 'tdesc' in g:   # "a man @0 on the stage", "a photograph", "@0", "a photograph of a girl @0"
+        d = g.pop('tdesc') or ''
+        if re.search(r'\b(?:said|says|told|tells)\b', d):
+            return fail('opening', text[:100])
+        mt = re.search(rf'(?:({HEADS}) )?({E})', d) or re.search(rf'(?:({HEADS}) )({E}) (?:in|on) the (?:photograph|photo|picture|portrait|stage)', rest)
+        g['th'], g['t'] = (mt.group(1), mt.group(2)) if mt else ((re.search(rf'\b({HEADS})\b', d) or [None, None])[1], None)
+        if not mt and not re.search(r'\b(?:photo|photograph|picture|portrait|man|woman|boy|girl|lady|gentleman|person)\b', d):
+            return fail('opening', text[:100])
+        names = ('th',) + names[1:]
     target, speaker, addressee = g.get('t'), g['s'], g.get('a')
     ch = _Chain()
     genders = {}
@@ -138,7 +149,7 @@ def read(tokens) -> str | None:
     if target:
         who.update({'he': target, 'she': target, 'his': target, 'her': target, 'him': target, 'this': target})
     elif re.search(r'\b(?:he|she|his|her|him)\b', utter):   # nobody pointed at: whose pronoun?
-        return None
+        return fail('pronoun without a pointed person', utter)
     if addressee:
         who.update({'your': addressee, 'you': addressee})
     if target:
@@ -162,17 +173,17 @@ def read(tokens) -> str | None:
         elif main is None:
             main = p
         else:
-            return None
+            return fail('speech has two statements', utter)
     if main is None:
-        return None
+        return fail('no statement', utter)
     mm = re.fullmatch(r'(.+?) is (.+)', main)
     if not mm:
-        return None
+        return fail('statement without "is"', main)
     left = _np(_subject(mm.group(1), genders).split(), who, ch)
     if left is None or _np(mm.group(2).split(), who, ch, end=left) is None:
-        return None
+        return fail('description', main)
     if any(isinstance(f, tuple) for f in ch.facts):   # identities between two named nodes: not handled
-        return None
+        return fail('identity of two named people', main)
     # after the speech: extra facts, then the question ("if X has no siblings , how is ...")
     from .rules import clause
     sents = [x.strip() for x in re.split(r' \. | ; ', ' ' + rest.strip() + ' ') if x.strip()]
@@ -191,10 +202,10 @@ def read(tokens) -> str | None:
         elif cl:
             extra += cl
         else:
-            return None
+            return fail('sentence after the speech', x)
     qq = _question(q, {'he': target})
     if not qq:
-        return None
+        return fail('question', q)
     a, b, ha, hb = qq
     facts = list(ch.facts) + extra
     named = set(re.findall(E, ' '.join(facts))) | {x for x in (target, speaker, addressee) if x}
