@@ -338,6 +338,7 @@ def ask_text(rng, x: str, y: str) -> str:
         f'Find the relation of {y} with {x}.', f'Which of the following is the relation of {y} to {x}?',
         f'What is the relation between {y} and {x}?', f'{cap(y)} is {poss(x)}?', f'Then, how is {y} related to {x}?',
         f'How are {y} and {x} related?', f'What relation does {y} have with {x}?',
+        f'How {y} is related to {x}?', f"What is {poss(y)} relation to {x}?", f'Find the relationship between {y} and {x}.',
         f'{cap(y)} is ____ of {x}.', f'{cap(y)} is {poss(x)} ____.', f'{cap(y)} is the ____ of {x}.',   # fill in the blank
     ])
 
@@ -768,6 +769,13 @@ def q_speech(rng) -> dict | None:
         if not addressee and not his.startswith('this'):
             ev.append(rp)
     open_ = rng.choice(SPEECH_OPEN)
+    reported = not addressee and rng.random() < 0.1   # "Pointing to the man, Rita said that his wife is ..." / "said: ..."
+    if reported:
+        open_ = rng.choice(['Pointing to {P}, {S} said that {U}', 'Pointing to {P}, {S} said: {U}', 'Pointing to {P}, {S} said - {U}',
+                            'Introducing {P}, {S} said that {U}'])
+        if 'that' in open_:
+            quote = ('', '')
+            utter = utter[0].lower() + utter[1:] if not utter.startswith('I ') else utter
     if addressee:
         open_ = rng.choice(['{S} said to {P}, {U}', '{S} told {P}, {U}', 'Looking at {P}, {S} said, {U}'])
     side = []   # someone the speaker talks to or introduces to: "said to her husband"
@@ -997,14 +1005,26 @@ def q_puzzle(rng) -> dict | None:
         extra.append((f'{_num(rng, males)} male members', {'t': 'males', 'n': males}))
         if rng.random() < 0.6:
             extra.append((f'{_num(rng, n - males)} female members', {'t': 'females', 'n': n - males}))
+    if rng.random() < 0.15:   # "There are two fathers, three brothers and a mother in the group"
+        ms = set(fam.people)
+        kid = lambda m: any(c in ms for c in w.children(m))
+        sib = lambda m: any(c in ms for c in w.siblings(m))
+        cnt = {'father': sum(1 for m in ms if fam.g(m) == 'M' and kid(m)), 'mother': sum(1 for m in ms if fam.g(m) == 'F' and kid(m)),
+               'brother': sum(1 for m in ms if fam.g(m) == 'M' and sib(m)), 'sister': sum(1 for m in ms if fam.g(m) == 'F' and sib(m))}
+        roles = [r for r in rng.sample(list(cnt), rng.randint(2, 4)) if cnt[r] > 0]
+        if len(roles) >= 2:
+            say = lambda r: (rng.choice(['a', 'one']) + f' {r}') if cnt[r] == 1 else f'{_num(rng, cnt[r])} {r}s'
+            extra.append((_listing(rng, [say(r) for r in roles]) + rng.choice(['', ' in the group', ' in the family']),
+                          [{'t': 'roles', 'role': r + 's', 'n': cnt[r]} for r in roles]))
     names = [r.surface for r in refs]
     lst = _listing(rng, names) if rng.random() < 0.85 or q.names.style != 'letters' else f'{names[0]} to {names[-1]}'
     intro = rng.choice([f'There are {_num(rng, n)} members {lst} in a family', f'A family consists of {_num(rng, n)} members {lst}',
                         f'{lst} are {_num(rng, n)} members of a family', f'In a family of {_num(rng, n)} members, {lst}',
                         f'{cap(_num(rng, n))} persons {lst} belong to a family'])
+    flat = lambda f: f if isinstance(f, list) else [f]
     if extra:
         intro += rng.choice([' with ', '. There are ', ' and there are ']) + _listing(rng, [e for e, _ in extra])
-    q.add(cap(intro) + '.', head + [f for _, f in extra])
+    q.add(cap(intro) + '.', head + [g for _, f in extra for g in flat(f)])
     # clues: each member linked to someone already placed
     placed, clues = [order[0]], []
     for m in order[1:]:
@@ -1019,9 +1039,32 @@ def q_puzzle(rng) -> dict | None:
         placed.append(m)
     by = {r.node: r for r in refs}
     for _ in range(rng.choice([0, 1, 1, 2, 3])):   # extra clue kinds
-        kind = rng.choice(['gender', 'gender', 'not', 'only', 'has', 'unmarried', 'opposite'])
+        kind = rng.choice(['gender', 'gender', 'not', 'only', 'has', 'unmarried', 'opposite', 'gen', 'gen', 'butnot', 'single'])
         x = rng.choice(order)
         rx = by[x]
+        top = min(fam.level[m] for m in fam.people)
+        if kind == 'gen':   # "X belongs to the third generation"
+            k = fam.level[x] - top + 1
+            o = rng.choice([['first', 'second', 'third', 'fourth'][k - 1], ['1st', '2nd', '3rd', '4th'][k - 1], ['1 st', '2 nd', '3 rd', '4 th'][k - 1]])
+            mar = 'married' if w.spouse(x) >= 0 else 'unmarried'
+            sx = {'M': 'male', 'F': 'female'}[rx.g]
+            text, fs = rng.choice([(f'{rx.surface} belongs to the {o} generation', []), (f'{rx.surface} is in the {o} generation', []),
+                                   (f'{rx.surface} is a {mar} {sx} in the {o} generation', [{'t': 'attr', 'x': rx, 'a': mar}, G(rx, rx.g)])])
+            clues.append((text, fs + [{'t': 'gen', 'x': rx, 'n': k}]))
+            continue
+        if kind == 'butnot':   # "P is the father of R but R is not his son"
+            kids = [c for c in w.children(x) if fam.g(c) == 'F']
+            if kids:
+                c = rng.choice(kids)
+                par, his = ('father', 'his') if rx.g == 'M' else ('mother', 'her')
+                clues.append((rng.choice([f'{rx.surface} is the {par} of {by[c].surface} but {by[c].surface} is not {his} son',
+                                          f"{rx.surface} is the {par} of {by[c].surface} but {by[c].surface} is not {poss(rx.surface)} son"]),
+                              [F(by[c], par, rx), G(by[c], 'F')]))
+            continue
+        if kind == 'single':   # "X is a single parent"
+            if w.children(x) and w.spouse(x) < 0:
+                clues.append((f'{rx.surface} is a single parent', [{'t': 'attr', 'x': rx, 'a': 'unmarried'}]))
+            continue
         if kind == 'gender':
             word = rng.choice({'M': ['male', 'a male', 'a male member', 'a man'], 'F': ['female', 'a female', 'a female member', 'a lady']}[rx.g])
             clues.append((f'{rx.surface} is {word}', [G(rx, rx.g)]))
@@ -1062,6 +1105,13 @@ def q_puzzle(rng) -> dict | None:
                 clues.append((rng.choice([f'{a} and {b} are of the {word} gender', f"{poss(a)} and {poss(b)} gender is {word}",
                                           f'{a} and {b} are of {word} gender', f"{a}'s gender is the {word} as {b}'s" if same else f'{a} and {b} have opposite genders']),
                               [{'t': 'same' if same else 'opposite', 'x': rx, 'y': by[y]}]))
+    if rng.random() < 0.15:   # professions the question never asks about: "Q is a doctor and the father of T"
+        profs = rng.sample(['doctor', 'lawyer', 'engineer', 'teacher', 'accountant', 'salesman', 'manager', 'architect'], 3)
+        for i, (c, f) in enumerate(clues[:3]):
+            m = re.match(r'^(\S+) is (the .+)$', c)
+            if m and profs:
+                pr = profs.pop()
+                clues[i] = (rng.choice([f'{m.group(1)} is a {pr} and {m.group(2)}', f'{m.group(1)} is {m.group(2)} and is a {pr}']), f)
     if rng.random() < 0.5:
         rng.shuffle(clues)
     if not any(w.children(m) and w.spouse(m) < 0 for m in fam.people) and rng.random() < 0.3:   # real puzzles say this a lot

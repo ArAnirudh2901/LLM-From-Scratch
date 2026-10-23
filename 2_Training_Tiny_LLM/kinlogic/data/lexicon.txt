@@ -21,6 +21,7 @@ accompanied
 accompany
 accomplishment
 accomplishments
+accountant
 accounting
 ache
 across
@@ -265,6 +266,7 @@ behind
 being
 believe
 belong
+belongs
 below
 benevolent
 berries
@@ -1908,6 +1910,7 @@ mostly
 moth
 mother
 mother-in-law
+mothers
 motorcycle
 mountain
 mountains
@@ -1953,6 +1956,7 @@ napped
 national
 natural
 naturally
+nd
 near
 nearby
 nearly
@@ -2351,6 +2355,7 @@ rates
 rather
 ratted
 raw
+rd
 re
 reach
 reached
@@ -2503,6 +2508,7 @@ sailing
 sake
 salad
 sale
+salesman
 sally
 salmon
 salon
@@ -2726,6 +2732,7 @@ spouse
 sprained
 spring
 squirrels
+st
 stacked
 stadium
 stahl

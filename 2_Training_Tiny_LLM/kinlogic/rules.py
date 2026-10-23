@@ -259,6 +259,9 @@ ASK = [
     (rf'{E} is (?:the )?____ (?:of|to) {E}', lambda a, b: f'ask {b} {a}'),
     (rf"{E} is {E} 's (?:____|\?)", lambda a, b: f'ask {b} {a}'),
     (rf'how are {E} and {E} related', lambda a, b: f'ask {b} {a}'),
+    (rf'how {E} is (?:related|connected) (?:to|with) {E}', lambda a, b: f'ask {b} {a}'),
+    (rf"what is {E} 's relation(?:ship)? (?:to|with) {E}", lambda a, b: f'ask {b} {a}'),
+    (rf'find (?:out )?the relation(?:ship)? between {E} and {E}', lambda a, b: f'ask {b} {a}'),
 ]
 
 

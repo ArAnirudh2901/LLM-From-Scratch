@@ -36,7 +36,7 @@ PUZZLE = ['members', 'couples', 'generations', 'males', 'females', 'singles']
 GROUPS = ['part', 'claim']
 ROLES = ['fathers', 'mothers', 'brothers', 'sisters']
 QUESTIONS = ['ask', 'who', 'count', 'gender', 'pair']
-KEYWORDS = [';', *QUESTIONS, *PUZZLE, *GROUPS, 'not', 'only', 'has', 'male', 'female', 'opposite', 'same',
+KEYWORDS = [';', *QUESTIONS, *PUZZLE, *GROUPS, *ROLES, 'gen', 'not', 'only', 'has', 'male', 'female', 'opposite', 'same',
             'people', 'couple', *SIDES, *ATTRS]
 RELS = [*KIN, *sorted(NONKIN)]
 NUMBERS = [str(n) for n in range(0, 21)]
@@ -185,6 +185,10 @@ def format_stmt(s: dict) -> str:
         return f"gender {s['x']}"
     if t == 'pair':
         return f"pair {s['what']}"
+    if t == 'gen':
+        return f"{s['x']} gen {s['n']}"
+    if t == 'roles':
+        return f"{s['role']} {s['n']}"
     return f"{t} {s['n']}"
 
 
@@ -205,8 +209,8 @@ def format(stmts: list[dict]) -> str:
 # ---------- constrained decoding ----------
 
 MAX_NEW = 16
-_STARTERS = [*QUESTIONS, *PUZZLE, *GROUPS]
-_AFTER_ENT = ['not', 'only', *SIDES, *RELS, 'male', 'female', *ATTRS, 'opposite', 'same', 'has']
+_STARTERS = [*QUESTIONS, *PUZZLE, *GROUPS, *ROLES]
+_AFTER_ENT = ['not', 'only', *SIDES, *RELS, 'male', 'female', *ATTRS, 'opposite', 'same', 'has', 'gen']
 _SIDED = sorted(SIDED)
 _ONLY = sorted(ONLY)
 _PAIR = ['male', 'female', 'couple', *KIN]
@@ -260,13 +264,15 @@ def _allowed(written: list[str], ents: list[str]) -> list[str]:
         return people if n == 1 else [';']
     if a == 'pair':
         return _PAIR if n == 1 else [';']
-    if a in PUZZLE or a in GROUPS:
+    if a in PUZZLE or a in GROUPS or a in ROLES:
         return NUMBERS[1:] if n == 1 else [';']
     # a statement about a person
     if n == 1:
         return _AFTER_ENT
     if cur[1] == 'has':
         return NUMBERS if n == 2 else sided(3, kin_only=True)
+    if cur[1] == 'gen':
+        return NUMBERS[1:6] if n == 2 else [';']
     if last in ('male', 'female') or last in ATTRS:
         return [';']
     if last in ('opposite', 'same'):

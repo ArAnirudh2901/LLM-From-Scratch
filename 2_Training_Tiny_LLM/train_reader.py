@@ -266,6 +266,13 @@ def main():
     init = torch.load(a.init, map_location='cpu', weights_only=False) if not ck and a.init and os.path.exists(a.init) else None
     pre = init if init and init.get('merges') else None   # a pretrained model (pretrain_reader.py) brings its vocabulary and shape
     vocab = Vocab.from_ck(ck) if ck else Vocab.from_ck(pre) if pre else build_vocab(extra=(a.reworded or '').split(',')[0] or None)
+    if pre and not ck:   # fact words the adopted vocabulary lacks ('singles', 'gen') get new rows
+        from kinlogic.facts import vocabulary
+        missing = [t for t in vocabulary() if t != ';' and t not in vocab.stoi]
+        if missing:
+            vocab = Vocab(vocab.itos + missing, vocab.merges)
+            pre = {**pre, 'config': {**pre['config'], 'vocab_size': len(vocab)}}
+            print('vocabulary grown by', missing, flush=True)
     cfg = ck['config'] if ck else {**pre['config'], 'dropout': a.dropout, 'block_size': max(pre['config']['block_size'], a.block)} if pre else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': a.n_layer, 'n_head': 6,
                                    'n_embd': 384, 'dropout': a.dropout, **({'arch': 'v10'} if a.arch == 'v10' else {})}
     if a.n_loop and not ck:

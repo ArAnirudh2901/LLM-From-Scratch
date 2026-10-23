@@ -43,7 +43,7 @@ def test_pipeline_keeps_faithful_rewordings(tmp_path, monkeypatch):
     for r in rows:
         r['names'] = {e['id']: e['text'] for e in prepare(r['text'])['ents']}
     fake = Fake('x')
-    fake.by_text = {r['text']: _facts_json(r) for r in rows}
+    fake.by_text = {t: _facts_json(r) for r in rows for t in (r['text'], RL.clean(r['text']))}   # a "Question 40:" prefix is cleaned off
     monkeypatch.setattr(RL, 'Backend', lambda model: fake)
     monkeypatch.setattr(RL, 'sample_sources', lambda src, n, seed=0: rows)
     out = tmp_path / 'out.jsonl.gz'

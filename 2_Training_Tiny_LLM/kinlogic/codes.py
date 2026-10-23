@@ -25,7 +25,8 @@ ASK = [re.compile(p) for p in (   # each: how is the first person related to the
     rf'relation(?:ship)? of {E} (?:to|with) {E}', rf'relation(?:ship)? between {E} and {E}',
     rf'in what way is {E} related to {E}', rf'find the relation of {E} (?:with|to) {E}', rf'what relation does {E} have with {E}',
     rf'which of the following is the relation of {E} to {E}', rf'how are {E} and {E} related', rf"{E} is {E} 's \?",
-    rf'{E} is (?:the )?____ (?:of|to) {E}', rf"{E} is {E} 's ____")]   # fill in the blank
+    rf'{E} is (?:the )?____ (?:of|to) {E}', rf"{E} is {E} 's ____",   # fill in the blank
+    rf"what is {E} 's relation(?:ship)? (?:to|with) {E}", rf'find (?:out )?the relation(?:ship)? between {E} and {E}')]
 GENDER = re.compile(rf'{E} (?:, )?(?:who )?is (?:an? )?(female|male|woman|man|girl|boy|lady|gentleman)\b')
 FEMALE = {'female', 'woman', 'girl', 'lady'}
 _WV = r'(?:(?:would|will|can|does) )?(?:means?|shows?|indicates?|represents?|implies|imply|denotes?)'
