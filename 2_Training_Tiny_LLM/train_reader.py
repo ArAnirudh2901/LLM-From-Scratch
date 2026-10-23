@@ -246,7 +246,7 @@ def main():
     ap.add_argument('--pool', default='data/dataset', help="verified questions from build_dataset.py ('' : generate on the fly)")
     ap.add_argument('--p_deep', default='0.08,0.25', help='share of deep chains at the start and after the ramp')
     ap.add_argument('--ramp_steps', type=int, default=20000, help='steps by which every depth (up to 12) is in the mix')
-    ap.add_argument('--reworded', default='data/reworded.jsonl.gz', help='frontier-model rewrites (kinlogic/reword.py), if present')
+    ap.add_argument('--reworded', default='data/reworded.jsonl.gz', help='extra verified rows, comma-separated files: rewrites (kinlogic/reword.py), STaR rows (star.py), minimal pairs')
     ap.add_argument('--p_reworded', type=float, default=0.15)
     ap.add_argument('--reworded_dev', default='data/reworded_dev.jsonl.gz', help='held-out rewrites (kinlogic/reword_merge.py): scored each evaluation')
     ap.add_argument('--w_reworded', type=float, default=0.4, help="weight of the held-out rewrites in the pick score (closest to real phrasing)")
@@ -260,7 +260,7 @@ def main():
     sched = (ck or {}).get('sched') or {'decay_start': None, 'decay_len': None, 'flat': 0}
     init = torch.load(a.init, map_location='cpu', weights_only=False) if not ck and a.init and os.path.exists(a.init) else None
     pre = init if init and init.get('merges') else None   # a pretrained model (pretrain_reader.py) brings its vocabulary and shape
-    vocab = Vocab.from_ck(ck) if ck else Vocab.from_ck(pre) if pre else build_vocab(extra=a.reworded)
+    vocab = Vocab.from_ck(ck) if ck else Vocab.from_ck(pre) if pre else build_vocab(extra=(a.reworded or '').split(',')[0] or None)
     cfg = ck['config'] if ck else {**pre['config'], 'dropout': a.dropout, 'block_size': max(pre['config']['block_size'], a.block)} if pre else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': a.n_layer, 'n_head': 6,
                                    'n_embd': 384, 'dropout': a.dropout, **({'arch': 'v10'} if a.arch == 'v10' else {})}
     model = make_model(cfg).to(device)
@@ -298,8 +298,9 @@ def main():
     authored = authored_examples(('train',)) if a.p_authored > 0 else []
     pool = load_pool(a.pool) if a.pool and os.path.isdir(a.pool) else None
     rw_dev = load_jsonl(a.reworded_dev) if a.reworded_dev and os.path.exists(a.reworded_dev) else []
-    if pool and a.reworded and os.path.exists(a.reworded):
-        pool['reworded'], pool['p_reworded'] = load_jsonl(a.reworded), a.p_reworded
+    extra = [f for f in (a.reworded or '').split(',') if f and os.path.exists(f)]   # rewrites, STaR rows, minimal pairs
+    if pool and extra:
+        pool['reworded'], pool['p_reworded'] = [r for f in extra for r in load_jsonl(f)], a.p_reworded
         print(f"reworded: {len(pool['reworded'])} verified rewrites at {a.p_reworded:.0%}", flush=True)
     if pool:
         import hashlib
