@@ -139,11 +139,13 @@ def explain(stmts: list[dict], result: dict, q_index: int = 0, names: dict | Non
 
 def match_option(answer: str, options) -> str | None:
     """The option whose text names the answer ("Maternal cousin" for "maternal cousin", "Cousin" also fits)."""
+    import re
     norm = lambda t: ' '.join(t.lower().replace('-', ' ').split())
+    opt = lambda t: re.sub(r"(?:\s*'s|')$", '', re.sub(r'^(?:his|her|my|your|their|the) ', '', norm(t).rstrip('.')))   # "His son's"
     a = norm(answer)
-    exact = [lab for lab, text in options if norm(text) == a]
+    exact = [lab for lab, text in options if norm(text) == a or opt(text) == a]
     if exact:
         return exact[0]
     base = a.replace('paternal ', '').replace('maternal ', '').replace(' (by marriage)', '')
-    loose = [lab for lab, text in options if norm(text) == base or norm(text).endswith(' ' + base)]
+    loose = [lab for lab, text in options if opt(text) == base or norm(text) == base or norm(text).endswith(' ' + base)]
     return loose[0] if len(loose) == 1 else None

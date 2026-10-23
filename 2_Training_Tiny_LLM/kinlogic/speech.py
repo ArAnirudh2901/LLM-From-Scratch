@@ -74,10 +74,10 @@ def _step(base, rel, ch, end=None):
 HEAD_ = rf'(?:(?:a|an|the|that|this) )?(?:({HEADS}) )?'
 OPEN = [   # (regex, groups): who is pointed at / introduced (target), who speaks, who is spoken to
     (rf'^(?:while |on )?(?:pointing (?:out )?(?:to|towards|at)|looking at|showing|introducing)(?: (.*?))?(?: ,)? {HEAD_}({E}) {SAY}'
-     rf'(?: (?:to )?{HEAD_}({E}))?(?: ,)? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('tdesc', 'sh', 's', 'ah', 'a')),
-    (rf'^(?:if )?{HEAD_}({E}) (?:introduces|introduced|introducing) {HEAD_}({E})(?: to (?:his|her|my) \w+)?(?: ,)? (?:by saying|saying|and says|and said|says|said)(?: ,)? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'th', 't')),
-    (rf'^{HEAD_}({E}) (?:points|pointed|pointing) (?:to|at|towards) {HEAD_}({E}) (?:and|,) (?:says|said)(?: ,)? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'th', 't')),
-    (rf'^(?:if )?{HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))?(?: ,)? " (.+?)(?: [.,])* " (?:, )?(.+)$', ('sh', 's', 'ah', 'a')),
+     rf'(?: (?:to )?{HEAD_}({E}))?(?: ,)? ["\'] (.+?)(?: [.,])* ["\'] (?:, )?(.+)$', ('tdesc', 'sh', 's', 'ah', 'a')),
+    (rf'^(?:if )?{HEAD_}({E}) (?:introduces|introduced|introducing) {HEAD_}({E})(?: to (?:his|her|my) \w+)?(?: ,)? (?:by saying|saying|and says|and said|says|said)(?: ,)? ["\'] (.+?)(?: [.,])* ["\'] (?:, )?(.+)$', ('sh', 's', 'th', 't')),
+    (rf'^{HEAD_}({E}) (?:points|pointed|pointing) (?:to|at|towards) {HEAD_}({E}) (?:and|,) (?:says|said)(?: ,)? ["\'] (.+?)(?: [.,])* ["\'] (?:, )?(.+)$', ('sh', 's', 'th', 't')),
+    (rf'^(?:if )?{HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))?(?: ,)? ["\'] (.+?)(?: [.,])* ["\'] (?:, )?(.+)$', ('sh', 's', 'ah', 'a')),
 ]
 EXTRA = [   # sentences after the speech: "if X has no siblings", "X is the only child"
     (rf'(?:if )?({E}) (?:has no siblings?|has no brothers? or sisters?|is the only child(?: of (?:his|her) parents)?|is an only child)', 'no-sibling'),
@@ -106,6 +106,9 @@ def _question(q, ids):
     m = (re.fullmatch(rf'(?:then ,? )?how is {HEAD_}({E}|he|she|the person|this person){d} (?:related |connected )?(?:to|with) {HEAD_}({E}){d} \?', q)
          or re.fullmatch(rf'who is {HEAD_}({E}) (?:to|of) {HEAD_}({E}){d} \?', q))
     if not m:
+        mw = re.fullmatch(rf'(?:at )?whose (?:photograph|photo|picture|portrait) (?:was it|is it|is this|was this|was {HEAD_}({E}) looking at|is {HEAD_}({E}) looking at|was {HEAD_}({E}) looking) \?', q)
+        if mw and ids.get('he') and ids.get('me'):   # "Whose photograph was it?": the person pictured, as related to the speaker
+            return ids['he'], ids['me'], None, None
         return None
     ha, a, hb, b = m.groups()
     a = ids.get('he') if a in ('he', 'she', 'the person', 'this person') else a
@@ -140,8 +143,9 @@ def read(tokens, why=None) -> str | None:
     ch = _Chain()
     genders = {}
     pointed = target is not None or names[0] == 'th'
-    if target is None and pointed:   # "pointing to a photograph": the person in it
-        target = ch.new()
+    if target is None and pointed:   # "pointing to a photograph": the person in it, named in the speech if it says "that man"
+        mt2 = re.search(rf'\b(?:that|this) (?:{HEADS}) ({E})', utter)
+        target = mt2.group(1) if mt2 else ch.new()
     for k, e in (('th', target), ('sh', speaker), ('ah', addressee)):
         if g.get(k) and e:
             genders[e] = 'male' if g[k] in MALE else 'female' if g[k] in FEMALE else None
@@ -163,7 +167,7 @@ def read(tokens, why=None) -> str | None:
     if re.search(r"\bmy (?:husband|husband 's)\b", utter):
         genders[speaker] = 'female'
     extra = []
-    parts = [p.strip() for p in re.split(r' \. | , and | and (?=i have)', utter) if p.strip()]
+    parts = [p.strip() for p in re.split(r' \. | , and | and (?=i have)| ,? but ', utter) if p.strip()]
     main = None
     for p in parts:
         if re.fullmatch(r'i have no (?:brother or sister|brothers or sisters|siblings|sibling)|brothers and sisters i have none|i have no brothers? and no sisters?|i am the only child(?: of my parents)?', p):
@@ -203,7 +207,7 @@ def read(tokens, why=None) -> str | None:
             extra += cl
         else:
             return fail('sentence after the speech', x)
-    qq = _question(q, {'he': target})
+    qq = _question(q, {'he': target, 'me': speaker})
     if not qq:
         return fail('question', q)
     a, b, ha, hb = qq
