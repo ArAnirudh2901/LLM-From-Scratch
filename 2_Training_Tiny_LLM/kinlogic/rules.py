@@ -154,6 +154,16 @@ def clause(c: str):
     m = re.fullmatch(rf'{E} and {E} are (?:the )?married couples?', c)
     if m:
         return [f'{m.group(1)} spouse {m.group(2)}']
+    m = re.fullmatch(r'there (?:are|is) ((?:(?:a|an|one|only one|\w+) (?:fathers?|mothers?|brothers?|sisters?)(?: ,| and| &| , and)? ?)+?)(?: in the (?:group|family))?', c)
+    if m:   # "there are two fathers , three brothers and a mother in the group"
+        items = re.findall(r'(a|an|one|only one|\w+) (father|mother|brother|sister)s?\b', m.group(1))
+        out = []
+        for n, r in items:
+            k = 1 if n in ('a', 'an', 'only one') else _num(n)
+            if k is None:
+                return None
+            out.append(f'{r}s {k}')
+        return out if out and len({o.split()[0] for o in out}) == len(out) else None
     m = re.fullmatch(rf'{E} is (?:a |the )?single parent', c)   # a parent with no spouse
     if m:
         return [f'{m.group(1)} unmarried']

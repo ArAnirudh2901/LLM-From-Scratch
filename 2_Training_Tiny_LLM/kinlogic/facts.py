@@ -11,6 +11,7 @@ Facts
     x has N [side] REL                            exactly N such relatives ("has only daughters": has 0 son)
     members N | couples N | generations N | males N | females N | singles N   closed-family puzzle facts (singles: single parents)
     x gen N                                       x is in generation N of the family (1: the oldest)
+    fathers N | mothers N | brothers N | sisters N   members who are that to another member ("two fathers in the group")
 Questions
     ask x y               how is y related to x?
     who x [side] REL      who is x's REL?
@@ -33,6 +34,7 @@ COUNTABLE = ['male', 'female', 'people', 'couples']
 SIDES = ['paternal', 'maternal']
 PUZZLE = ['members', 'couples', 'generations', 'males', 'females', 'singles']
 GROUPS = ['part', 'claim']
+ROLES = ['fathers', 'mothers', 'brothers', 'sisters']
 QUESTIONS = ['ask', 'who', 'count', 'gender', 'pair']
 KEYWORDS = [';', *QUESTIONS, *PUZZLE, *GROUPS, 'not', 'only', 'has', 'male', 'female', 'opposite', 'same',
             'people', 'couple', *SIDES, *ATTRS]
@@ -99,6 +101,8 @@ def parse_stmt(tk: list[str]) -> dict | None:
         return {'t': 'pair', 'what': b} if n == 2 and (b in ('male', 'female', 'couple') or b in KIN) else None
     if a in PUZZLE or a in GROUPS:
         return {'t': a, 'n': int(b)} if n == 2 and b.isdigit() else None
+    if a in ROLES:   # "fathers 2": two members are fathers of members; exact readers only for now
+        return {'t': 'roles', 'role': a, 'n': int(b)} if n == 2 and b.isdigit() else None
     if not is_ent(a) or b is None:
         return None
     if n == 2:

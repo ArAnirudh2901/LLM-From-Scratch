@@ -387,6 +387,7 @@ class _Run:
     has: list = field(default_factory=list)
     extra: list = field(default_factory=list)
     gens: list = field(default_factory=list)   # "x gen N"
+    roles: dict = field(default_factory=dict)   # "fathers 2": members who are fathers of members
 
     def tick(self) -> bool:
         self.steps += 1
@@ -442,7 +443,8 @@ def _finish(w, run: _Run):
 
     for w2 in _identities(w, run):
         for w4 in counted(w2):
-                for w5 in _gender_totals(w4, run):
+            for w4b in _role_totals(w4, run):
+                for w5 in _gender_totals(w4b, run):
                     for w6 in _gender_links(w5, run.links, run):
                         if _final_ok(w6, run):
                             yield w6
@@ -714,6 +716,34 @@ def _has(w, has, run: _Run, create=True):
                 worlds = [w4 for w3 in worlds for w4 in _apply_path(w3, w3.find(x), path, -1)] if path else []
             for w3 in worlds:
                 yield from _has(w3, rest, run, create)
+
+
+def _role_totals(w, run: _Run):
+    """ "two fathers, three brothers and a mother in the group": members with a member child or sibling and an open
+    gender are given one, so that every stated count is exact."""
+    if not run.roles:
+        yield w
+        return
+    members = _members(w, run)
+    ms = set(members)
+    linked = [m for m in members if any(w.find(c) in ms for c in w.children(m) + w.siblings(m))]
+    open_ = [m for m in linked if not w.g(m)]
+    from itertools import product
+    for gs in product('MF', repeat=len(open_)):
+        if not run.tick():
+            return
+        w2 = w.clone()
+        if not (all(w2.set_g(m, g) for m, g in zip(open_, gs)) and w2.normalize()):
+            continue
+        ms2 = {w2.find(m) for m in members}
+        kids = lambda m: any(w2.find(c) in ms2 for c in w2.children(m))
+        sibs = lambda m: any(w2.find(c) in ms2 for c in w2.siblings(m))
+        count = {'fathers': sum(1 for m in ms2 if w2.g(m) == 'M' and kids(m)), 'mothers': sum(1 for m in ms2 if w2.g(m) == 'F' and kids(m)),
+                 'brothers': sum(1 for m in ms2 if w2.g(m) == 'M' and sibs(m)), 'sisters': sum(1 for m in ms2 if w2.g(m) == 'F' and sibs(m))}
+        if all(count[k] == n for k, n in run.roles.items()):
+            for m, g in zip(open_, gs):
+                w2.choices.append(('gender', m, g))
+            yield w2
 
 
 def _gender_totals(w, run: _Run):
@@ -1029,6 +1059,8 @@ def solve(stmts: list[dict], label=lambda e: e, asks=(), parts=None, people=(), 
             run.has.append(s)
         elif t == 'gen':
             run.gens.append(s)
+        elif t == 'roles':
+            run.roles[s['role']] = s['n']
         elif t in ('members', 'couples', 'males', 'females', 'generations', 'singles'):
             setattr(run, t, s['n'])
     questions += [{'t': 'ask', 'x': x, 'y': y, 'picked': True} for x, y in asks]
