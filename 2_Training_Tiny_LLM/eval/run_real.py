@@ -46,6 +46,17 @@ def as_text(r):
     return f"{r['question']} {opts}".strip()
 
 
+SYNONYMS = [(r'\bgrand[- ]?(uncle|aunt|nephew|niece)\b', r'great-\1'), (r'\bgrand (father|mother|son|daughter)\b', r'grand\1'),
+            (r'\bspouse\b', 'husband or wife')]
+
+
+def _same_words(t):
+    t = t.lower().strip()
+    for a, b in SYNONYMS:
+        t = re.sub(a, b, t)
+    return t
+
+
 def correct(r, res):
     if r.get('answer') and r['options']:
         return res['option'] == r['answer']
@@ -53,7 +64,7 @@ def correct(r, res):
     got = res.get('answer') or ''
     if not want or not got:
         return False
-    if match_option(got, [('x', want)]) or match_option(want, [('x', got)]):
+    if match_option(got, [('x', want)]) or match_option(want, [('x', got)]) or _same_words(got) == _same_words(want):
         return True
     mv_w, mv_g = option_moves(re.sub(r"^.*?\bis\s+\w+'s\s+", '', want)), option_moves(got)
     return bool(mv_w and mv_g and [m for m, _ in mv_w] == [m for m, _ in mv_g])

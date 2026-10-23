@@ -735,7 +735,9 @@ NEUTRAL = {'father': 'parent', 'mother': 'parent', 'son': 'child', 'daughter': '
            'sister': 'sibling', 'husband': 'spouse', 'wife': 'spouse', 'uncle': 'uncle or aunt',
            'aunt': 'uncle or aunt', 'nephew': 'nephew or niece', 'niece': 'nephew or niece',
            'grandfather': 'grandparent', 'grandmother': 'grandparent', 'grandson': 'grandchild',
-           'granddaughter': 'grandchild'}
+           'granddaughter': 'grandchild', 'father-in-law': 'parent-in-law', 'mother-in-law': 'parent-in-law',
+           'son-in-law': 'child-in-law', 'daughter-in-law': 'child-in-law', 'brother-in-law': 'sibling-in-law',
+           'sister-in-law': 'sibling-in-law'}
 
 
 def relation_in(w: World, a: int, b: int) -> dict:

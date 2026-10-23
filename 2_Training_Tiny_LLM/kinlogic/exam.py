@@ -248,6 +248,8 @@ def _answer_one(p, lf, read, priors):
     if t == 'ask':
         cands = list(q['answers'])
         status = 'gender' if q['status'] == 'unique' and cands[0].get('moves') and not cands[0].get('gender') else q['status']
+        if options and q['status'] == 'gender' and len({a.get('key') for a in cands}) > 1 and _labelled(options, CANT):
+            return {**out, **res, 'answer': 'cannot be determined', 'option': _labelled(options, CANT)}   # only a gender the text never gives decides
         a, lab = _relation_option(cands, options, status) if options else (cands[0], None)
         if options and not lab:
             if status in ('gender', 'conditional', 'ambiguous') and _labelled(options, CANT):
