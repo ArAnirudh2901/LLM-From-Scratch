@@ -29,16 +29,19 @@ def rope(x, cos, sin):
 
 
 class Attention(nn.Module):
-    def __init__(self, d: int, n_head: int, dropout: float):
+    def __init__(self, d: int, n_head: int, dropout: float, qk_norm: bool = False):
         super().__init__()
         self.n_head, self.d_head, self.dropout = n_head, d // n_head, dropout
         self.qkv = nn.Linear(d, 3 * d, bias=False)
         self.proj = nn.Linear(d, d, bias=False)
+        self.q_norm, self.k_norm = (RMSNorm(self.d_head), RMSNorm(self.d_head)) if qk_norm else (None, None)   # OLMo 2 / Qwen3: bounded attention logits
 
     def heads(self, x, cos, sin):
         B, T, C = x.shape
         q, k, v = self.qkv(x).view(B, T, 3, self.n_head, self.d_head).unbind(2)
         q, k, v = (t.transpose(1, 2) for t in (q, k, v))
+        if self.q_norm is not None:
+            q, k = self.q_norm(q), self.k_norm(k)
         return rope(q, cos, sin), rope(k, cos, sin), v
 
     def forward(self, x, cos, sin):
@@ -60,10 +63,10 @@ class SwiGLU(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, d, n_head, hidden, dropout):
+    def __init__(self, d, n_head, hidden, dropout, qk_norm=False):
         super().__init__()
         self.ln1, self.ln2 = RMSNorm(d), RMSNorm(d)
-        self.attn = Attention(d, n_head, dropout)
+        self.attn = Attention(d, n_head, dropout, qk_norm)
         self.ffn = SwiGLU(d, hidden, dropout)
 
     def forward(self, x, cos, sin):
@@ -77,14 +80,14 @@ class Reader(nn.Module):
 
     def __init__(self, vocab_size: int, block_size: int, n_layer: int = 6, n_head: int = 6, n_embd: int = 384,
                  dropout: float = 0.0, copy: bool = True, d_copy: int = 128, rope_base: float = 10000.0, arch='v10',
-                 n_loop: int = 1):
+                 n_loop: int = 1, qk_norm: bool = False):
         super().__init__()
         self.n_loop = n_loop   # looped reader: the whole stack runs n_loop times with shared weights (Universal Transformer)
         self.block_size, self.copy, self.d_copy = block_size, copy, d_copy
         hidden = int(8 * n_embd / 3 + 63) // 64 * 64
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
         self.drop = nn.Dropout(dropout)
-        self.blocks = nn.ModuleList([Block(n_embd, n_head, hidden, dropout) for _ in range(n_layer)])
+        self.blocks = nn.ModuleList([Block(n_embd, n_head, hidden, dropout, qk_norm) for _ in range(n_layer)])
         self.loop_emb = nn.Parameter(torch.zeros(n_loop, n_embd)) if n_loop > 1 else None   # which pass the shared blocks are on
         self.exit_gate = nn.Linear(n_embd, 1) if n_loop > 1 else None   # lambda_r: probability of stopping after loop r (PonderNet)
         self.loops_now = n_loop   # loops in use (set_loops): fewer while a loop curriculum ramps up, or to decode faster

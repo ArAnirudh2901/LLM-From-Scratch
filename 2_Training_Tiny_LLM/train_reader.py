@@ -246,6 +246,9 @@ def main():
     ap.add_argument('--n_loop', type=int, default=None, help='looped reader: run the layer stack this many times (shared weights)')
     ap.add_argument('--loop_curriculum', default='', help="loops by share of the budget, e.g. '1:0,2:0.25,3:0.5' (retrofitted recurrence, McLeish et al. 2025)")
     ap.add_argument('--neftune', type=float, default=0.0, help='noise on input embeddings while training (NEFTune; 5 is the paper default)')
+    ap.add_argument('--optim', default='adamw', choices=['adamw', 'muon'], help='muon: Newton-Schulz-orthogonalised updates for hidden matrices (Moonlight / Kimi K2); best from scratch, not on an AdamW-trained model')
+    ap.add_argument('--muon_lr', type=float, default=0.02)
+    ap.add_argument('--qk_norm', action='store_true', help='RMSNorm on queries and keys (new models only: changes a warm-started one)')
     ap.add_argument('--llrd', type=float, default=1.0, help='layer-wise learning-rate decay: block i gets lr * llrd^(top - i); keeps pretrained features (LP-FT)')
     ap.add_argument('--ema', type=float, default=0.999, help='decay of the averaged weights used to evaluate and save (0: off)')
     ap.add_argument('--pool', default='data/dataset', help="verified questions from build_dataset.py ('' : generate on the fly)")
@@ -277,6 +280,8 @@ def main():
                                    'n_embd': 384, 'dropout': a.dropout, **({'arch': 'v10'} if a.arch == 'v10' else {})}
     if a.n_loop and not ck:
         cfg = {**cfg, 'n_loop': a.n_loop}
+    if a.qk_norm and not ck:
+        cfg = {**cfg, 'qk_norm': True}
     model = make_model(cfg).to(device)
     if ck:
         model.load_state_dict(ck.get('raw') or ck['model'])
@@ -291,8 +296,13 @@ def main():
     for n, p_ in model.named_parameters():   # layer-wise learning-rate decay: lower layers move less
         m = re.match(r'blocks\.(\d+)\.', n)
         sc = a.llrd ** (nb - 1 - int(m.group(1))) if m else a.llrd ** nb if n.startswith('tok_emb') else 1.0
-        groups.setdefault(sc, []).append(p_)
-    opt = torch.optim.AdamW([{'params': ps, 'scale': sc} for sc, ps in groups.items()], lr=a.lr, betas=(0.9, 0.95), weight_decay=a.weight_decay)
+        muon = a.optim == 'muon' and n.startswith('blocks.') and p_.ndim == 2
+        groups.setdefault((sc * (a.muon_lr / a.lr if muon else 1.0), muon), []).append(p_)
+    if a.optim == 'muon':
+        from optim_muon import Muon
+        opt = Muon([{'params': ps, 'scale': sc, 'use_muon': mu} for (sc, mu), ps in groups.items()], lr=a.lr, weight_decay=a.weight_decay)
+    else:
+        opt = torch.optim.AdamW([{'params': ps, 'scale': sc} for (sc, _), ps in groups.items()], lr=a.lr, betas=(0.9, 0.95), weight_decay=a.weight_decay)
     curriculum = sorted((float(f), int(k)) for k, f in (x.split(':') for x in a.loop_curriculum.split(',') if x)) if a.loop_curriculum else []
     amp = a.amp and device.type == 'cuda'
     scaler = torch.amp.GradScaler('cuda', enabled=amp)
