@@ -298,9 +298,10 @@ def main():
     authored = authored_examples(('train',)) if a.p_authored > 0 else []
     pool = load_pool(a.pool) if a.pool and os.path.isdir(a.pool) else None
     rw_dev = load_jsonl(a.reworded_dev) if a.reworded_dev and os.path.exists(a.reworded_dev) else []
-    extra = [f for f in (a.reworded or '').split(',') if f and os.path.exists(f)]   # rewrites, STaR rows, minimal pairs
+    extra = [(f.split('*')[0], int(f.split('*')[1]) if '*' in f else 1) for f in (a.reworded or '').split(',') if f]
+    extra = [(f, k) for f, k in extra if os.path.exists(f)]   # rewrites, STaR rows, minimal pairs; 'file*3' repeats a file
     if pool and extra:
-        pool['reworded'], pool['p_reworded'] = [r for f in extra for r in load_jsonl(f)], a.p_reworded
+        pool['reworded'], pool['p_reworded'] = [r for f, k in extra for r in load_jsonl(f) * k], a.p_reworded
         print(f"reworded: {len(pool['reworded'])} verified rewrites at {a.p_reworded:.0%}", flush=True)
     if pool:
         import hashlib
