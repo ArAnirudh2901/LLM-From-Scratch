@@ -286,8 +286,9 @@ def _answer_one(p, lf, read, priors):
         return {**out, **_sufficiency(stmts, options, people, priors)}
     spoken = '"' in p['tokens'] and re.search(r'\b(?:said|says|say|told|tells|introduc\w*|pointing|points?)\b', ' '.join(p['tokens']))
     if spoken and not SMALLEST:   # the convention only on readings the exact speech reader wrote (model misreadings: off)
+        from .rules import read as read_rules
         from .speech import read as read_speech
-        spoken = read_speech(p['tokens']) == lf_read
+        spoken = lf_read in (read_speech(p['tokens']), read_rules(p['tokens']))
     r = solve(stmts, people=people, priors=priors, smallest=bool(spoken))
     if not r['questions']:
         return {**out, 'answer': 'no question found', 'option': None, 'status': 'none', 'explanation': ''}

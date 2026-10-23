@@ -503,8 +503,8 @@ def _smallest(worlds, run: _Run, facts=(), priors=None, keep=(), cap: int = 400)
                     w2 = w.clone()
                     if not (w2.unify(u, v) and w2.normalize() and _final_ok(w2, run) and _violation(w2, run) is None):
                         continue
-                    if any(w.ent[n] in (priors or {}) and not w.g(n) and w2.g(n) not in (None, priors[w.ent[n]])
-                           for n in roots if w.named[n]):   # never against the gender a name suggests
+                    if any(not w.g(n) and w2.g(n) and w2.g(n) != (priors or {}).get(w.ent[n])
+                           for n in roots if w.named[n]):   # never a gender against the name's, nor one neither text nor name gives
                         continue
                     ids = run.ids   # every stated relation still named so; no couple of blood relatives
                     if any(f['t'] == 'rel' and w2.find(ids[f['y']]) not in w2.relatives(ids[f['x']], f['r'], f.get('side'))

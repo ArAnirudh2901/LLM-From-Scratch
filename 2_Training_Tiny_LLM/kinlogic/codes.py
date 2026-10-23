@@ -238,8 +238,8 @@ def read(tokens, options=None, ents=None) -> str | None:
     if claims and re.search(r'which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect|derived)\b|what does [^?]* mean\b|what is meant by', text):
         return ' ; '.join([f for r in runs for f in facts_of(r, defs)] + claims)
     extra = []
-    rel_of = re.search(rf"how is {E} 's {REL} related to {E}", text)        # "how is R's husband related to H?"
-    m = re.search(rf"how is {E} related to {E} 's {REL}", text)             # "how is H related to R's husband?"
+    rel_of = re.search(rf"how is {E} 's (?:only )?{REL} related to {E}", text)        # "how is R's husband related to H?"
+    m = re.search(rf"how is {E} related to {E} 's (?:only )?{REL}", text)             # "how is H related to R's (only) husband?"
     of_rel = m.groups() if m else None                                     # (asked person, anchor, relation)
     if of_rel is None:
         m = re.search(rf"how is {E} related to (?:the )?{REL} of {E}", text)   # "how is S related to the father of J?"

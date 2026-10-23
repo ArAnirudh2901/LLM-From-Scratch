@@ -106,6 +106,9 @@ def normalize(text: str) -> str:
     text = re.sub(r'\b(son|daughter|brother|sister|father|mother)\s+in[\s-]+law\b', r'\1-in-law', text, flags=re.I)   # "daughter in law"
     text = re.sub(rf'\b(the|is|of|his|her|my|your)({REL_WORD})\b', r'\1 \2', text, flags=re.I)   # "thedaughter" (lost space)
     text = re.sub(r'\b(is|of)(the)\b', r'\1 \2', text, flags=re.I)
+    text = re.sub(r'\b(of|is|to)([A-Z])\b', r'\1 \2', text)   # "daughter ofZ"
+    if re.search(r'\b(?:means?|denotes?|indicates?|represents?)\b', text):   # code questions: the letter x as the × symbol
+        text = re.sub(r'(?<![A-Za-z])([A-Z])\s?[xX]\s?(?=[A-Z](?![A-Za-z]))', r'\1 × ', text)
     text = re.sub(r'\bgrand\s+(father|mother|son|daughter|child|children|parent|parents)\b', r'grand\1', text, flags=re.I)
     text = re.sub(r'_{2,}', ' ____ ', text)   # one blank token however long the line
     return re.sub(r'\s+', ' ', text).strip()
