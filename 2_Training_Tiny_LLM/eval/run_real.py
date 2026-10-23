@@ -10,7 +10,7 @@ import glob
 import json
 import re
 
-from kinlogic.exam import _relation_option, answer, option_moves
+from kinlogic.exam import _relation_option, answer, answer_adaptive, option_moves
 from eval.sites import complete
 from kinlogic.explain import match_option
 
@@ -70,13 +70,13 @@ def correct(r, res):
     return bool(mv_w and mv_g and [m for m, _ in mv_w] == [m for m, _ in mv_g])
 
 
-def run(read, rows):
+def run(read, rows, read_more=None, threshold=0.6):
     from eval.real_clean import broken
     by = collections.defaultdict(lambda: [0, 0])
     sp = collections.defaultdict(lambda: [0, 0])
     misses, oks = [], []
     for r in rows:
-        res = answer(as_text(r), read)
+        res = answer_adaptive(as_text(r), read, read_more, threshold) if read_more else answer(as_text(r), read)
         ok = correct(r, res)
         oks.append(ok)
         for k in (split_of(r), f'{split_of(r)} fair' if not broken(r) else None):
@@ -106,11 +106,16 @@ if __name__ == '__main__':
     ap.add_argument('--limit', type=int, default=None, help='first N questions only (quick comparisons)')
     ap.add_argument('--split', default=None, help="only 'dev' or 'test' questions")
     ap.add_argument('--k', type=int, default=8, help='readings per question (beam width; the engine votes)')
+    ap.add_argument('--adaptive', type=float, default=None, help='re-read with beam 2k + 2k samples when the vote share is below this')
+    ap.add_argument('--check', action='store_true', help='execution-guided beam: readings no family fits do not count toward k')
     a = ap.parse_args()
     dev = get_device(force_cpu=a.cpu)
     model, vocab = load(a.ckpt, dev)
     rows = [r for r in load_real() if not a.split or split_of(r) == a.split][:a.limit]
-    score, misses = run(lambda b: generate(model, vocab, b, dev, k=a.k), rows)
+    from kinlogic.codes import _fits
+    chk = (lambda lf: _fits(lf) is not None) if a.check else None
+    more = (lambda b: [x + y for x, y in zip(generate(model, vocab, b, dev, k=2 * a.k, check=chk), generate(model, vocab, b, dev, k=2 * a.k, sample=True, temperature=1.0))]) if a.adaptive else None
+    score, misses = run(lambda b: generate(model, vocab, b, dev, k=a.k, check=chk), rows, more, a.adaptive or 0.6)
     print(json.dumps(score, indent=1))
     if a.out:
         json.dump({'score': score, 'misses': misses}, open(a.out, 'w'), indent=1)

@@ -166,6 +166,17 @@ def answer(text: str, read, priors: dict | None = None) -> dict:
         return {'answer': 'error', 'option': None, 'status': 'error', 'explanation': f'{type(e).__name__}: {e}', 'facts': ''}
 
 
+def answer_adaptive(text: str, read, read_more, threshold: float = 0.6, priors: dict | None = None) -> dict:
+    """More readings only where the first ones disagree (test-time compute where it is needed, Snell et al. 2024):
+    answer with `read`; when the winning option holds less than `threshold` of the vote or nothing fits, answer again
+    with `read_more` (a wider beam plus samples)."""
+    first = answer(text, read, priors)
+    if first.get('status') not in ('error', 'none', 'contradiction') and first.get('confidence', 1.0) >= threshold:
+        return first
+    second = answer(text, read_more, priors)
+    return second if second.get('status') not in ('error',) else first
+
+
 def _answer(text: str, read, priors: dict | None = None) -> dict:
     """read may return one reading per question or several, best first, optionally with scores (mean log-probability
     per token). Every reading is solved; readings that fail (contradiction, no question) drop out; the rest vote for

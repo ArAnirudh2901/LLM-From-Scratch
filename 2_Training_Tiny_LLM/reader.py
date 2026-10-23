@@ -163,9 +163,11 @@ def _text(written):
 
 @torch.no_grad()
 def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, sample: bool = False,
-             temperature: float = 1.0, max_new: int = 96, bs: int = 32) -> list[list[tuple[str, float]]]:
+             temperature: float = 1.0, max_new: int = 96, bs: int = 32, check=None) -> list[list[tuple[str, float]]]:
     """Fact readings for each question, only ever writing valid statements.
     Beam search (k best, by mean log-probability per token) or k samples (for reinforcement learning).
+    check(facts) -> bool: beam readings it rejects (no family fits) do not count toward the k, so the search goes on
+    to consistent ones (execution-guided decoding, Wang et al. 2018); they are used only if nothing passes.
     Returns, per question, [(facts, score)] best first (samples in drawing order)."""
     model.eval()
     sep, eos = vocab.stoi['<sep>'], vocab.stoi['<eos>']
@@ -181,6 +183,7 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
         cache = [[kv[0][rows], kv[1][rows]] for kv in cache]
         logits, plen_h = logits[rows], plen[rows]
         done = [[] for _ in chunk]
+        spare = [[] for _ in chunk]   # finished readings `check` rejected
         for step in range(max_new):
             lp = torch.log_softmax(logits / (temperature if sample else 1.0), -1).cpu()
             cand = []   # (question, parent row, token, new log-prob)
@@ -208,7 +211,8 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
             for qi, h, t, sc in keep:
                 written, n = hyps[h][1], hyps[h][3] + 1
                 if t == eos or step == max_new - 1:
-                    done[qi].append((_text(written), sc / n))
+                    txt = _text(written)
+                    (done if sample or check is None or check(txt) else spare)[qi].append((txt, sc / n))
                     continue
                 nxt_hyps.append((qi, written + [';' if t == sep else vocab.itos[t]], sc, n))
                 parents.append(h)
@@ -225,7 +229,7 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
             hyps = nxt_hyps
             logits = _step(model, cache, torch.tensor(toks, device=device), plen_h + step, plen_h, P, step + 1)
         for qi in range(len(chunk)):
-            res = done[qi]
+            res = done[qi] or spare[qi]
             if not sample:   # best first, one entry per distinct reading
                 best = {}
                 for f, sc in res:
