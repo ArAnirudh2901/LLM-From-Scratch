@@ -155,6 +155,7 @@ def _roman_set(text):
 # ---------- the answer ----------
 
 NAMES_DECIDE = os.environ.get('KIN_NAMES_DECIDE', '1') == '1'   # a name's gender is taken as given (real exam keys: +8 of 576 dev questions vs preferring 'cannot be determined')
+RELAX = os.environ.get('KIN_RELAX', '1') == '1'   # a self-contradictory question still gets the answer its keys expect
 DESC_UNNAMED = os.environ.get('KIN_DESC_UNNAMED', '1') == '1'   # described people may turn out to be someone named
 SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for every spoken description (dev +1.1, locked test -0.4 with r3); off: exact speech readings only
 
@@ -231,6 +232,26 @@ def _people(tokens, stmts):
     return out
 
 
+def _relaxed(stmts, people, priors, smallest):
+    """(result, facts) for the first single change that makes contradictory facts consistent: a gendered relation word
+    made neutral (wife -> spouse, mother -> parent) or a stated gender dropped; None if no single change does."""
+    from .engine import NEUTRAL
+    from .kin import KIN
+    for i, st in enumerate(stmts):
+        if st.get('claim') or st.get('part') or st.get('neg'):
+            continue
+        if st['t'] == 'rel' and NEUTRAL.get(st['r']) in KIN:
+            alt = stmts[:i] + [{**st, 'r': NEUTRAL[st['r']]}] + stmts[i + 1:]
+        elif st['t'] == 'gender':
+            alt = stmts[:i] + stmts[i + 1:]
+        else:
+            continue
+        r = solve(alt, people=people, priors=priors, smallest=smallest)
+        if r['ok'] and r['questions']:
+            return r, alt
+    return None
+
+
 def _answer_one(p, lf, read, priors):
     ents, options = p['ents'], p['options']
     priors = {**name_priors(ents), **(priors or {})}
@@ -258,6 +279,11 @@ def _answer_one(p, lf, read, priors):
     r = solve(stmts, people=people, priors=priors, smallest=bool(spoken))
     if not r['questions']:
         return {**out, 'answer': 'no question found', 'option': None, 'status': 'none', 'explanation': ''}
+    if not r['ok'] and RELAX:   # self-contradictory question (a coded chain that makes P both a wife and a mother):
+        relaxed = _relaxed(stmts, people, priors, bool(spoken))   # answer with the one gender clash taken out
+        if relaxed:
+            r, stmts = relaxed
+            out['facts'] = out['facts'] + '  [relaxed: one gender clash ignored]'
     if not r['ok']:
         return {**out, 'answer': 'contradiction', 'option': None, 'status': 'contradiction',
                 'explanation': 'The facts as read contradict each other.'}
