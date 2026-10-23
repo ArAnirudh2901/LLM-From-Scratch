@@ -43,8 +43,27 @@ STYLES = {
               "'Cannot be determined' among the options when the gender is open",
 }
 
+GRID = {   # coverage is planned, not left to chance (Kimi K3): each batch draws one value per axis
+    'relations': ['in-laws (son-in-law, sister-in-law, co-brother)', 'grand- and great-grand relations', 'uncle/aunt/nephew/niece on a stated side',
+                  'only son / only daughter / only child', 'step and half relations avoided; plain blood relations', 'spouse chains (husband\'s sister\'s son)',
+                  'cousins', 'father-in-law / mother-in-law chains'],
+    'wording': ['possessive chains ("X\'s mother\'s brother")', '"the X of the Y of Z" chains', 'pronouns (he, she, his, her) that must be resolved',
+                'who-clauses ("Q, whose sister is R, ...")', 'plural and list forms ("A, B and C are sisters")', 'negations ("X is not the father of Y")',
+                'descriptions instead of names ("a lady", "the boy in the photograph")', 'counts ("has two sons", "has no brother")'],
+    'trap': ['a gender left open by the text (answer may be "cannot be determined")', 'an extra person who is irrelevant', 'two people with similar roles',
+             'an answer that depends on one small word ("only", "his" vs "her")', 'none'],
+}
+WEIGHTS = {'puzzle': 3.0, 'count': 1.5, 'speech': 2.5, 'statements': 2.5, 'claims': 1.0, 'coded': 0.8, 'sufficiency': 1.0, 'story': 1.0,
+           'gender': 1.5}   # roughly the error rate of each kind on the real dev half
+
+
+def features(rng):
+    return '; '.join(f'{k}: {rng.choice(v)}' for k, v in GRID.items())
+
+
 WRITE = """You write practice questions for Indian competitive exams (SSC, IBPS, RRB, CAT) on blood relations.
 Write {n} NEW questions, all different from each other, in this style: {style}.
+Across the batch, use these features: {features}.
 Each question must follow logically from its text, have 4 or 5 options and exactly one correct option.
 Use varied names ({names}); use plain text (no markdown, no LaTeX).
 Return only JSON: a list of objects {{"question": "...", "options": ["...", "..."], "answer": <index of the correct option, 0-based>}}."""
@@ -82,7 +101,8 @@ def _json(text):
 
 
 def batch(style, n, rng):
-    raw = call(WRITE.format(n=n, style=STYLES[style], names=rng.choice(NAMES)), 'gemini', temperature=1.0, json_out=True)
+    raw = call(WRITE.format(n=n, style=STYLES[style], names=rng.choice(NAMES), features=features(rng)), 'gemini', temperature=1.0,
+               json_out=True)
     qs = [q for q in (_json(raw) or []) if isinstance(q, dict) and isinstance(q.get('question'), str)
           and isinstance(q.get('options'), list) and 4 <= len(q['options']) <= 5 and isinstance(q.get('answer'), int)
           and 0 <= q['answer'] < len(q['options'])]
@@ -116,7 +136,7 @@ def main():
     styles = list(STYLES)
     tried = kept = waits = 0
     while have < a.n:
-        style = styles[(tried // a.batch) % len(styles)] if rng.random() < 0.7 else rng.choice(styles)
+        style = rng.choices(styles, weights=[WEIGHTS.get(x, 1.0) for x in styles])[0]
         try:
             got, n = batch(style, a.batch, rng)
             waits = 0
