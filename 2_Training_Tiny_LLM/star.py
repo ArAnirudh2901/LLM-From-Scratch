@@ -54,6 +54,16 @@ def main():
             key = 'abcde'[q['answer']]
             exact = read_code(p['tokens'], p['options'], p['ents']) or _fits(read_rules(p['tokens']) or read_speech(p['tokens']))
             named = {t for t in p['tokens'] if t[0] == '@'}
+            facts_in = lambda lf: sum(1 for f in lf.split(' ; ') if f.split()[:1] not in (['ask'], ['who'], ['count']))
+            sizes = sorted(facts_in(lf) for lf, _ in list(b) + list(s))
+            typical = sizes[len(sizes) // 2] if sizes else 0
+            try:   # the reader's best reading has no fitting family: the question itself is likely inconsistent
+                top = _answer_one(p, b[0][0], lambda batch: [''] * len(batch), None) if b else {}
+            except Exception:
+                top = {}
+            if top.get('status') == 'contradiction' and not exact:
+                stats['inconsistent question'] += 1
+                continue
             good = {}
             for lf, sc in list(b) + list(s):
                 if lf in good:
@@ -64,7 +74,7 @@ def main():
                     continue
                 if res.get('option') != key or res.get('status') in ('error', 'contradiction', 'none'):
                     continue
-                if named - set(re.findall(r'@\d+', lf)):
+                if named - set(re.findall(r'@\d+', lf)) or facts_in(lf) < typical:   # every person, no sentence dropped
                     continue
                 good[lf] = sc
             hit = len(good) / max(1, len({lf for lf, _ in list(b) + list(s)}))
