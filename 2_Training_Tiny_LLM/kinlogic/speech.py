@@ -63,7 +63,7 @@ def _np(words, who, ch, end=None):
         if _np(m.group(3).split(), who, ch, end=node) is None:
             return None
         return m.group(1) if end is None or end == m.group(1) else (ch.facts.append(('same', m.group(1), end)) or end)
-    m = re.fullmatch(rf'(?:(?:{HEADS}) )?({E}) ,? who is (.+)', s)   # "the woman @2 who is the mother of ..."
+    m = re.fullmatch(rf'(?:(?:{HEADS}) )?({E})(?: ,)? who is (.+)', s)   # "the woman @2 who is the mother of ..."
     if m:
         if _np(m.group(2).split(), who, ch, end=m.group(1)) is None:
             return None
@@ -83,6 +83,10 @@ def _np(words, who, ch, end=None):
     m = re.fullmatch(r'(my|his|her|your|our) (.+)', s)
     if m and _rel(m.group(2)) and m.group(1) in who:
         return _step(who[m.group(1)], _rel(m.group(2)), ch, end)
+    m = re.fullmatch(rf"({E}) 's (.+?) ({E})", s)   # "@1 's father @2": the relative is named
+    if m and _rel(m.group(2)) and (end is None or end == m.group(3)):
+        ch.facts.append(f'{m.group(1)} {_rel(m.group(2))} {m.group(3)}')
+        return m.group(3)
     m = re.fullmatch(rf'(my|his|her|your|our) (.+?) ({E})', s)   # "my father-in-law @2": the relative is named
     if m and _rel(m.group(2)) and m.group(1) in who and (end is None or end == m.group(3)):
         ch.facts.append(f'{who[m.group(1)]} {_rel(m.group(2))} {m.group(3)}')
@@ -135,10 +139,10 @@ def _question(q, ids):
     q = q.strip()
     q = re.sub(rf'\b(?:the|that|this) (?:{HEADS}) (?:in|on) the (?:photograph|photo|picture|portrait|stage)\b(?! ?@)', 'he', q)
     d = r"(?: (?:(?!'s\b|of\b)[^?])*?)?"   # "playing football", "in the photograph"; never "'s husband"
-    m = (re.fullmatch(rf'(?:then ,? )?how is {HEAD_}({E}|he|she|the person|this person){d} (?:related |connected )?(?:to|with) {HEAD_}({E}){d} \?', q)
+    m = (re.fullmatch(rf'(?:then(?: ,)? )?how is {HEAD_}({E}|he|she|the person|this person){d} (?:related |connected )?(?:to|with) {HEAD_}({E}){d} \?', q)
          or re.fullmatch(rf'who is {HEAD_}({E}) (?:to|of) {HEAD_}({E}){d} \?', q)
-         or re.fullmatch(rf'(?:then ,? )?how {HEAD_}({E}|he|she){d} is (?:related |connected )(?:to|with) {HEAD_}({E}){d} \?', q)
-         or re.fullmatch(rf'(?:then ,? )?how is {HEAD_}({E}|he|she){d} (?:related |connected )?(?:to|with) ()(#\d+) \?', q)
+         or re.fullmatch(rf'(?:then(?: ,)? )?how {HEAD_}({E}|he|she){d} is (?:related |connected )(?:to|with) {HEAD_}({E}){d} \?', q)
+         or re.fullmatch(rf'(?:then(?: ,)? )?how is {HEAD_}({E}|he|she){d} (?:related |connected )?(?:to|with) ()(#\d+) \?', q)
          or re.fullmatch(rf"what is {HEAD_}({E}) 's relation(?:ship)? (?:to|with) {HEAD_}({E}){d} \?", q))
     if not m:
         mw = re.fullmatch(rf'(?:at )?whose (?:photograph|photo|picture|portrait) (?:was it|is it|is this|was this|was {HEAD_}({E}) looking at|is {HEAD_}({E}) looking at|was {HEAD_}({E}) looking) \?', q)
@@ -221,7 +225,7 @@ def read(tokens, why=None) -> str | None:
     if re.search(r"\bmy (?:husband|husband 's)\b", utter):
         genders[speaker] = 'female'
     extra = []
-    parts = [p.strip() for p in re.split(r' \. | , and | and (?=i have)| ,? but | and (?=(?:his|her|my|your) \w+ is )', utter) if p.strip()]
+    parts = [p.strip() for p in re.split(r' \. | , and | and (?=i have)|(?: ,)? but | and (?=(?:his|her|my|your) \w+ is )', utter) if p.strip()]
     mains = []
     for p in parts:
         if re.fullmatch(r'i have no (?:brother or sister|brothers or sisters|siblings|sibling)|brothers and sisters i have none|i have no brothers? and no sisters?|i (?:am|is) the only child(?: of my parents)?', p):
@@ -251,7 +255,14 @@ def read(tokens, why=None) -> str | None:
     if mq:
         sents[-1:] = [mq.group(1), mq.group(2)]
         q = mq.group(2)
+    mq = re.fullmatch(r'(.+?)(?: ,)? if (.+?) \?', q)   # "how is A related to B if C is the sister of D ?"
+    if mq:
+        sents[-1:] = [mq.group(2), mq.group(1) + ' ?']
+        q = mq.group(1) + ' ?'
     for x in sents[:-1]:
+        if re.fullmatch(r'(?:brothers and sisters i have none|i have no (?:brothers? or sisters?|siblings?))', x):
+            extra.append(f'{speaker} no-sibling')
+            continue
         got = next((f'{mm2.group(1)} {kind}' for pat, kind in EXTRA for mm2 in [re.fullmatch(pat, x)] if mm2), None)
         cl = None if got else clause(re.sub(r'^if ', '', x))
         if got:
@@ -261,6 +272,11 @@ def read(tokens, why=None) -> str | None:
         else:
             return fail('sentence after the speech', x)
     q = re.sub(r'\bthe speaker\b', speaker, q)
+    q = re.sub(r'\bwomen\b', 'woman', q)
+    for h, e in ((g.get('sh'), speaker), (g.get('th'), target)):   # "how is girl related to X": the speaker introduced as "a girl"
+        if h and e and h != (g.get('th') if e == speaker else g.get('sh')):
+            q = re.sub(rf"\b(?:the |that |this )?{h}\b(?! (?:@|#)\d)", e, q)
+    q = re.sub(rf"^({E}|he|she) is {HEAD_}({E}) 's \s*[?:]$", r'how is \1 related to \3 ?', q).replace('  ', ' ')   # "the boy @1 is girl 's ?"
     mc = re.fullmatch(rf"(.+ (?:to|with)) ({E}) 's ([a-z-]+) \?", q)   # "how is the speaker related to @1 's father ?"
     if mc and _rel(mc.group(3)) and not _rel(mc.group(3)).startswith('only'):
         k = ch.new()

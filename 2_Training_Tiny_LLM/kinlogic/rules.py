@@ -292,7 +292,7 @@ ASK = [
 
 
 def question(c: str, ch=None):
-    c = re.sub(r'^(?:then ,? |so ,? |in terms of relationship ,? )', '', c.strip())
+    c = re.sub(r'^(?:then(?: ,)? |so(?: ,)? |in terms of relationship(?: ,)? )', '', c.strip())
     c = re.sub(r'^how is ([@#]\d+) is ', r'how is \1 ', c)   # "how is X is related to Y"
     c = re.sub(r'^(?:to find|find out) (?=what|who|how)', '', c)
     m = re.fullmatch(rf'who are (?:the )?(cousins|brothers|sisters|sons|daughters|children) of {E}', c)   # "who are the cousins of X"
@@ -358,7 +358,7 @@ def _part(p: str, ch, depth: int = 0):
             second = _part(sec, ch, depth + 1)
             if second:
                 return first + second
-    m = re.fullmatch(rf"{E} ,? {E} 's {REL} ,? has (?:a|an|one) (son|daughter) {E} and (?:a|an|one) (son|daughter) {E}", p)
+    m = re.fullmatch(rf"{E}(?: ,)? {E} 's {REL}(?: ,)? has (?:a|an|one) (son|daughter) {E} and (?:a|an|one) (son|daughter) {E}", p)
     if m and _rel(m.group(3)):   # "X , Y 's sister , has a son A and a daughter B"
         x, y, r, r1, a1, r2, a2 = m.groups()
         return [f'{y} {_rel(r)} {x}', f'{x} {r1} {a1}', f'{x} {r2} {a2}']
@@ -368,7 +368,7 @@ def _part(p: str, ch, depth: int = 0):
     m = re.fullmatch(rf'{E} has (?:a|an) {REL} and (?:a|an) {REL}', p)   # "X has a brother and a niece"
     if m and _rel(m.group(2)) and _rel(m.group(3)) and not any(_rel(g).startswith('only') for g in m.groups()[1:]):
         return [f'{m.group(1)} {_rel(m.group(2))} {ch.new()}', f'{m.group(1)} {_rel(m.group(3))} {ch.new()}']
-    m = re.fullmatch(rf'{E} has (only one|one|a|an) (child|son|daughter) ,? who (.+)', p)   # "X has only one child , who belongs to ..."
+    m = re.fullmatch(rf'{E} has (only one|one|a|an) (child|son|daughter)(?: ,)? who (.+)', p)   # "X has only one child , who belongs to ..."
     if m:
         x, det, r, rest = m.groups()
         k = ch.new()
@@ -393,7 +393,7 @@ def _part(p: str, ch, depth: int = 0):
         got = _part(f'{m.group(1)} is {rest}' if not rest.startswith(('is ', 'has ')) else f'{m.group(1)} {rest}', ch, depth + 1)
         if got:
             return [f'{m.group(1)} prof {prof}'] + got
-    m = re.fullmatch(rf'{E} ,? the {PROF} ,? (.+)', p)   # "D , the salesman , is married to ..."
+    m = re.fullmatch(rf'{E}(?: ,)? the {PROF}(?: ,)? (.+)', p)   # "D , the salesman , is married to ..."
     if m:
         got = _part(f'{m.group(1)} {m.group(3)}', ch, depth + 1)
         if got:
@@ -408,7 +408,7 @@ def _part(p: str, ch, depth: int = 0):
         k = ch.new()
         g = {'lady': ['female'], 'female': ['female'], 'male': ['male'], 'gentleman': ['male']}.get(m.group(2) or '', [])
         return [f'{k} prof {m.group(3)}', f'{m.group(1)} spouse {k}'] + [f'{k} {x}' for x in g]
-    m = re.fullmatch(rf"{E} 's {REL} {E} ,? (is .+|has .+)", p)   # "X 's brother Y , is the grandfather of ..."
+    m = re.fullmatch(rf"{E} 's {REL} {E}(?: ,)? (is .+|has .+)", p)   # "X 's brother Y , is the grandfather of ..."
     if m and _rel(m.group(2)):
         rest = _part(f'{m.group(3)} {m.group(4)}', ch, depth + 1)
         if rest:
@@ -489,13 +489,13 @@ def read(tokens, why=None) -> str | None:
     parts = [p for p in parts if not INSTRUCTION.match(p.strip())]   # "answer the questions based on the information given below"
     if parts:   # "..., then what is the relation of X with Y" / "how is X related to Y if Z has no siblings"
         last = parts[-1]
-        m = re.fullmatch(r'(.+?) ,? then ((?:what|who|how) .+)', last)
+        m = re.fullmatch(r'(.+?)(?: ,)? then ((?:what|who|how) .+)', last)
         if m:
             parts[-1:] = [m.group(1), m.group(2)]
-        m = re.fullmatch(r'((?:what|who|how) .+?) ,? if (.+)', parts[-1])
+        m = re.fullmatch(r'((?:what|who|how) .+?)(?: ,)? if (.+)', parts[-1])
         if m:
             parts[-1:] = [m.group(2), m.group(1)]
-        m = re.fullmatch(r'(.+?) ,? if (.+?) ,? ((?:what|who|how) .+)', parts[-1])
+        m = re.fullmatch(r'(.+?)(?: ,)? if (.+?)(?: ,)? ((?:what|who|how) .+)', parts[-1])
         if m:
             parts[-1:] = [m.group(1), m.group(2), m.group(3)]
     from .speech import _Chain
@@ -503,9 +503,9 @@ def read(tokens, why=None) -> str | None:
     for k, p in enumerate(parts):
         p = re.sub(r'^(?:and|while|whereas) ', '', p.strip())
         p = re.sub(r'^\( ?[a-z0-9] ?\) ', '', p)
-        p = re.sub(r'^(?:pick|choose|select) the (?:right|correct) (?:choice|option|answer) from the (?:given )?options ,? (?:if )?', '', p)   # "(a) X is ..." clue labels
+        p = re.sub(r'^(?:pick|choose|select) the (?:right|correct) (?:choice|option|answer) from the (?:given )?options(?: ,)? (?:if )?', '', p)   # "(a) X is ..." clue labels
         if k == len(parts) - 1:
-            if re.fullmatch(r'(?:then ,? )?which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)', p.strip()):
+            if re.fullmatch(r'(?:then(?: ,)? )?which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)', p.strip()):
                 break   # "which of the following statements is true?": the exam layer checks the options
             q = question(p, ch)
             if q:
@@ -517,7 +517,7 @@ def read(tokens, why=None) -> str | None:
                 why.append(p)
             return None
         facts += got
-    if ask is None and facts and re.fullmatch(r'(?:then ,? )?which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)', parts[-1].strip()):
+    if ask is None and facts and re.fullmatch(r'(?:then(?: ,)? )?which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)', parts[-1].strip()):
         return ' ; '.join(facts)   # "which of the following statements is true?": the exam layer checks the options
     if ask is None or not facts:
         return None

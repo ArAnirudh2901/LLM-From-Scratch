@@ -17,9 +17,9 @@ VERB = r'(?:means|implies|denotes|represents|indicates|signifies|stands for|is c
 NOT_OP = {',', ';', '.', ':', '(', ')', '[', ']', 'and', 'or', 'if', 'then', 'is', 'the', 'of', 'a', 'an', 'to', 'in'}
 REL = r'((?:paternal |maternal )?[a-z][a-z-]*)'
 E = r'(@\d+)'
-DEF_FWD = re.compile(rf'{E} (\S+) {E} ,? ?{VERB} (?:that )?{E} is (?:the )?{REL} (?:of )?{E}')
-DEF_MARRIED = re.compile(rf'{E} (\S+) {E} ,? ?{VERB} (?:that )?{E} is married to {E}')
-DEF_POSS = re.compile(rf"{E} (\S+) {E} ,? ?{VERB} (?:that )?{E} is {E} 's {REL}")
+DEF_FWD = re.compile(rf'{E} (\S+) {E}(?: ,)? ?{VERB} (?:that )?{E} is (?:the )?{REL} (?:of )?{E}')
+DEF_MARRIED = re.compile(rf'{E} (\S+) {E}(?: ,)? ?{VERB} (?:that )?{E} is married to {E}')
+DEF_POSS = re.compile(rf"{E} (\S+) {E}(?: ,)? ?{VERB} (?:that )?{E} is {E} 's {REL}")
 ASK = [re.compile(p) for p in (   # each: how is the first person related to the second?
     rf'how is {E} (?:related|connected) (?:to|with) {E}', rf'how {E} is (?:related|connected) (?:to|with) {E}', rf'(?:what|who) is {E} to {E}', rf'{E} is related to {E} as',
     rf'relation(?:ship)? of {E} (?:to|with) {E}', rf'relation(?:ship)? between {E} and {E}',
