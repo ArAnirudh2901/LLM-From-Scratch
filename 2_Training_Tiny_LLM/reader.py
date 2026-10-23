@@ -249,7 +249,7 @@ PONDER_PRIOR, PONDER_BETA = 0.5, 0.01   # geometric prior on the stopping loop a
 
 def fact_losses(model, idx, tgt, lm, vocab):
     """Mean cross-entropy of the facts (copy head included for v10) and of the question's words."""
-    if getattr(model, 'arch', None) == 'v10' and getattr(model, 'n_loop', 1) > 1:   # looped reader: PonderNet loss
+    if getattr(model, 'arch', None) == 'v10' and getattr(model, 'loops_now', 1) > 1:   # looped reader: PonderNet loss
         mt = tgt != -100
         lps, lams, h = model.fact_logprobs_loops(idx, mt, vocab.stoi['<c>'])
         y = tgt[mt][:, None]

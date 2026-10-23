@@ -96,6 +96,9 @@ def call_rotating(prompt: str, models: list[str], **kw) -> str:
     import time
     import urllib.error
     last = None
+    soonest = min(_RESTING.get(m, 0) for m in models)
+    if soonest > time.time():   # every model resting: wait for the first one rather than fail the batch
+        time.sleep(min(600, soonest - time.time()) + 1)
     for m in models:
         if _RESTING.get(m, 0) > time.time():
             continue

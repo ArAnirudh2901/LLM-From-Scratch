@@ -87,7 +87,8 @@ class Reader(nn.Module):
         self.blocks = nn.ModuleList([Block(n_embd, n_head, hidden, dropout) for _ in range(n_layer)])
         self.loop_emb = nn.Parameter(torch.zeros(n_loop, n_embd)) if n_loop > 1 else None   # which pass the shared blocks are on
         self.exit_gate = nn.Linear(n_embd, 1) if n_loop > 1 else None   # lambda_r: probability of stopping after loop r (PonderNet)
-        self.loops_now = n_loop   # loops used when decoding (set_loops); training always runs them all
+        self.loops_now = n_loop   # loops in use (set_loops): fewer while a loop curriculum ramps up, or to decode faster
+        self.neft = 0.0   # NEFTune noise on input embeddings while training (Jain et al. 2023); set by train_reader
         self.ln_f = RMSNorm(n_embd)
         if copy:
             self.copy_q = nn.Linear(n_embd, d_copy, bias=False)
@@ -110,13 +111,19 @@ class Reader(nn.Module):
     def set_loops(self, r: int):
         self.loops_now = max(1, min(int(r), self.n_loop))
 
+    def _embed(self, idx):
+        x = self.tok_emb(idx)
+        if self.training and self.neft:
+            x = x + (torch.rand_like(x) * 2 - 1) * (self.neft / math.sqrt(idx.size(1) * x.size(-1)))
+        return self.drop(x)
+
     def hidden_loops(self, idx):
-        """Normalised hidden states after every loop (deep supervision) and lambda_r per position."""
+        """Normalised hidden states after every loop in use (deep supervision) and lambda_r per position."""
         T = idx.size(1)
-        x = self.drop(self.tok_emb(idx))
+        x = self._embed(idx)
         cos, sin = self.cos[:T], self.sin[:T]
         hs, lams = [], []
-        for r in range(self.n_loop):
+        for r in range(self.loops_now):
             if self.loop_emb is not None:
                 x = x + self.loop_emb[r]
             for blk in self.blocks:
@@ -155,7 +162,7 @@ class Reader(nn.Module):
 
     def hidden(self, idx):
         T = idx.size(1)
-        x = self.drop(self.tok_emb(idx))
+        x = self._embed(idx)
         cos, sin = self.cos[:T], self.sin[:T]
         for blk, r, first in self.passes():
             if first and self.loop_emb is not None:
