@@ -155,6 +155,7 @@ def _roman_set(text):
 # ---------- the answer ----------
 
 NAMES_DECIDE = os.environ.get('KIN_NAMES_DECIDE', '1') == '1'   # a name's gender is taken as given (real exam keys: +8 of 576 dev questions vs preferring 'cannot be determined')
+INVERSE = os.environ.get('KIN_INVERSE', '1') == '1'   # no option names the answer but one names the reverse relation: take it
 RELAX = os.environ.get('KIN_RELAX', '1') == '1'   # a self-contradictory question still gets the answer its keys expect
 DESC_UNNAMED = os.environ.get('KIN_DESC_UNNAMED', '1') == '1'   # described people may turn out to be someone named
 SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for every spoken description (dev +1.1, locked test -0.4 with r3); off: exact speech readings only
@@ -232,6 +233,16 @@ def _people(tokens, stmts):
     return out
 
 
+def _inverse(stmts, people, priors, smallest):
+    """The last asked relation the other way round (y's relation to x), or None."""
+    i = max((k for k, st in enumerate(stmts) if st['t'] == 'ask'), default=None)
+    if i is None:
+        return None
+    alt = stmts[:i] + [{**stmts[i], 'x': stmts[i]['y'], 'y': stmts[i]['x']}] + stmts[i + 1:]
+    r = solve(alt, people=people, priors=priors, smallest=smallest)
+    return r['questions'][-1] if r['ok'] and r['questions'] and r['questions'][-1]['answers'] else None
+
+
 def _relaxed(stmts, people, priors, smallest):
     """(result, facts) for the first single change that makes contradictory facts consistent: a gendered relation word
     made neutral (wife -> spouse, mother -> parent) or a stated gender dropped; None if no single change does."""
@@ -257,6 +268,7 @@ def _answer_one(p, lf, read, priors):
     priors = {**name_priors(ents), **(priors or {})}
     names = {e['id']: e['text'] for e in ents}
     out = {'facts': lf, 'options': options}
+    lf_read = lf
     if DESC_UNNAMED:   # "the boy", "a man": a description, not a name, so facts like "only grandson" may make it someone named
         desc = {e['id'] for e in ents if e.get('kind') == 'desc'}
         lf = re.sub(r'@(\d+)\b', lambda m: f'#{900 + int(m.group(1))}' if m.group(0) in desc else m.group(0), lf)
@@ -275,7 +287,7 @@ def _answer_one(p, lf, read, priors):
     spoken = '"' in p['tokens'] and re.search(r'\b(?:said|says|say|told|tells|introduc\w*|pointing|points?)\b', ' '.join(p['tokens']))
     if spoken and not SMALLEST:   # the convention only on readings the exact speech reader wrote (model misreadings: off)
         from .speech import read as read_speech
-        spoken = read_speech(p['tokens']) == lf
+        spoken = read_speech(p['tokens']) == lf_read
     r = solve(stmts, people=people, priors=priors, smallest=bool(spoken))
     if not r['questions']:
         return {**out, 'answer': 'no question found', 'option': None, 'status': 'none', 'explanation': ''}
@@ -318,6 +330,12 @@ def _answer_one(p, lf, read, priors):
             a, lab = _relation_option(alternatives(r, qi), options, status)
             if lab:
                 res['explanation'] += f"\n[NOTE]: Read with {names.get(a['merged'][1], a['merged'][1])} as the person the text leaves unnamed."
+            elif INVERSE and not _labelled(options, NONE) and not _labelled(options, CANT):
+                q2 = _inverse(stmts, people, priors, bool(spoken))   # "How is Riya related to that man? (a) Father": keyed the other way round
+                a, lab = _relation_option(list(q2['answers']), options, q2['status']) if q2 else (None, None)
+                if lab:
+                    res['explanation'] += '\n[NOTE]: No option names this relation; the options name the reverse one.'
+                    return {**out, **res, 'answer': a.get('label') or a['key'], 'option': lab}
         a = a or cands[0]
         label = a.get('label') or a['key']
         text_ans = q.get('neutral') or label if q['status'] == 'gender' and a is cands[0] else label
@@ -418,7 +436,7 @@ def _which_expression(p, stmts, read, priors):
              for _, o in p['options']]
     preps = [prepare(t) for t in texts]
     lfs = [g if isinstance(g, str) else (g[0][0] if isinstance(g[0], tuple) else g[0]) for g in read([pp['tokens'] for pp in preps])]
-    ok, options_ = [], p['options']
+    ok, maybe, options_ = [], [], p['options']
     for (lab, o), pp, lf in zip(p['options'], preps, lfs):
         by = {e['text']: e['id'] for e in pp['ents']}
         x, y = by.get(names.get(c['x'])), by.get(names.get(c['y']))
@@ -426,8 +444,13 @@ def _which_expression(p, stmts, read, priors):
         if x is None or y is None:
             continue
         r = solve(st, people=[e['id'] for e in pp['ents']])
-        if r['worlds'] and all(claim_holds(w, [{**c, 'x': x, 'y': y, 'claim': 1}], r['ids']) is True for w in r['worlds']):
+        vs = [claim_holds(w, [{**c, 'x': x, 'y': y, 'claim': 1}], r['ids']) for w in r['worlds']]
+        if vs and all(v is True for v in vs):
             ok.append(lab)
+        elif vs and all(v is not False for v in vs):
+            maybe.append(lab)   # holds once the gender the expression leaves open is the asked one
+    if not ok and len(maybe) == 1:
+        ok = maybe
     return {'answer': ', '.join(ok) or 'none', 'option': ok[0] if len(ok) == 1 else (_labelled(options_, NONE) if not ok else None),
             'status': 'expression',
             'explanation': f"[CHECKED]: options {', '.join(ok) or 'none'} make {names.get(c['y'])} the {c['r']} of {names.get(c['x'])}"}
