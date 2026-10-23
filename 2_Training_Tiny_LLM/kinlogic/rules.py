@@ -20,6 +20,11 @@ GWORD = {'male': 'male', 'man': 'male', 'boy': 'male', 'gentleman': 'male', 'fem
 PLURAL = {'brothers': 'brother', 'sisters': 'sister', 'siblings': 'sibling', 'sons': 'son', 'daughters': 'daughter'}
 
 
+PROFS = {'doctor', 'lawyer', 'engineer', 'teacher', 'professor', 'architect', 'accountant', 'salesman', 'manager', 'clerk', 'pilot',
+         'nurse', 'businessman', 'contractor', 'dentist', 'banker', 'singer', 'dancer', 'housewife', 'student', 'farmer', 'jeweller'}
+PROF = rf"({'|'.join(sorted(PROFS))})"
+
+
 def _rel(word):
     """(fact text 'only paternal uncle', ok) for a relation phrase; None if not a relation."""
     w = word.replace('elder ', '').replace('younger ', '').replace('eldest ', '').replace('youngest ', '')
@@ -119,7 +124,50 @@ def clause(c: str):
     m = re.fullmatch(rf'{E} is not (?:the )?{REL} of {E}', c)
     if m and _rel(m.group(2)):
         return [f'{m.group(3)} not {_rel(m.group(2))} {m.group(1)}']
+    m = re.fullmatch(rf'{E} (?:belongs? to|is (?:in|from|of)) (?:the )?{ORD} generation', c)   # "who belongs to the 3 rd generation"
+    if m and _ord(m.group(2)):
+        return [f'{m.group(1)} gen {_ord(m.group(2))}']
+    m = re.fullmatch(rf'{E} is (?:an? |the )?(?:(married|unmarried) )?(male|female|man|woman|lady|gentleman|boy|girl)(?: member| person)? (?:in|of|from) (?:the )?{ORD} generation', c)
+    if m and _ord(m.group(4)):   # "X is married female in 1st generation"
+        return [f'{m.group(1)} {GWORD[m.group(3)]}'] + ([f'{m.group(1)} {m.group(2)}'] if m.group(2) else []) + [f'{m.group(1)} gen {_ord(m.group(4))}']
+    m = re.fullmatch(rf'{E} is (?:an? )?(unmarried|married) (male|female|man|woman|lady|gentleman|boy|girl)(?: member| person)?', c)
+    if m:   # "who is unmarried female"
+        return [f'{m.group(1)} {m.group(2)}', f'{m.group(1)} {GWORD[m.group(3)]}']
+    m = re.fullmatch(rf'{E} is (unmarried|married|(?:an? )?(?:male|female)) and (?:is )?(?:the |a |an )?{REL} (?:of|to) {E}', c)
+    if m and _rel(m.group(3)):   # "X is unmarried and aunt of Y"
+        w = m.group(2).split()[-1]
+        return [f'{m.group(1)} {w}', f'{m.group(4)} {_rel(m.group(3))} {m.group(1)}']
+    m = re.fullmatch(rf'neither {E} nor {E} (?:has|have) (?:a |any )?(sibling|brother|sister)s?', c)
+    if m:
+        return [f'{m.group(1)} no-{m.group(3)}', f'{m.group(2)} no-{m.group(3)}']
+    m = re.fullmatch(rf'(?:the )?genders? of ((?:{E} , )+{E} and {E}) (?:is|are) (?:the )?same', c)
+    if m:   # "the gender of A , B and C is same"
+        ps = re.findall(E, m.group(1))
+        return [f'{ps[0]} same {q}' for q in ps[1:]]
+    m = re.fullmatch(rf'(?:the )?genders? of {E} and {E} (?:is|are) (?:the )?same as (?:that of )?{E}', c)
+    if m:
+        return [f'{m.group(1)} same {m.group(3)}', f'{m.group(2)} same {m.group(3)}']
+    m = re.fullmatch(rf'{E} and {E} are (?:the )?(sons|daughters|children|brothers|sisters) of {E}', c)
+    if m:   # "A and B are the sons of C"
+        r = {'children': 'child'}.get(m.group(3), PLURAL.get(m.group(3)))
+        return [f'{m.group(4)} {r} {m.group(1)}', f'{m.group(4)} {r} {m.group(2)}']
+    m = re.fullmatch(rf'{E} and {E} are (?:the )?married couples?', c)
+    if m:
+        return [f'{m.group(1)} spouse {m.group(2)}']
+    m = re.fullmatch(rf'{E} is (?:a |the )?single parent', c)   # a parent with no spouse
+    if m:
+        return [f'{m.group(1)} unmarried']
     return None
+
+
+ORD = r'(\d+ ?(?:st|nd|rd|th)?|first|second|third|fourth|fifth|1 st|2 nd|3 rd|4 th)'
+ORDS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5}
+
+
+def _ord(w):
+    w = w.replace(' ', '')
+    m = re.match(r'(\d+)', w)
+    return int(m.group(1)) if m else ORDS.get(w)
 
 
 HEAD = [   # closed-family puzzle sentences
@@ -133,11 +181,12 @@ HEAD = [   # closed-family puzzle sentences
 
 
 INSTRUCTION = re.compile(r'^(?:in this type of questions?\b.*|(?:please )?(?:answer|refer|read|study|consider|go through|carefully read|directions?)\b.*\b(?:questions?|information|data|below|following|passage)\b.*|directions?)$')
-NUMKEY = [('members', r'(?:members?|persons?|people|individuals)'), ('couples', r'(?:married )?couples?'), ('generations', r'generations?'),
+NUMKEY = [('members', r'(?:(?:family )?members?|persons?|people|individuals)'), ('couples', r'(?:married )?couples?'), ('generations', r'generations?'),
           ('females', r'(?:females?|female members?|ladies|women)'), ('males', r'(?:males?|male members?|men)')]
 FILLER = {'there', 'are', 'is', 'in', 'a', 'the', 'family', 'of', 'with', 'and', 'consisting', 'consists', 'belong', 'belongs',
           'to', 'which', 'has', 'have', 'only', 'total', 'members', 'member', 'persons', 'person', 'people', 'it', ',', '-', 'all',
-          'from', 'this', 'that', 'comprising', 'comprises', 'includes', 'including', 'family members'}
+          'from', 'this', 'that', 'comprising', 'comprises', 'includes', 'including', 'family members', '(', ')', 'consist',
+          'consisting', 'live', 'lives', 'living', 'present', 'together'}
 
 
 def header(c: str):
@@ -205,6 +254,16 @@ ASK = [
 
 def question(c: str, ch=None):
     c = re.sub(r'^(?:then ,? |so ,? |in terms of relationship ,? )', '', c.strip())
+    c = re.sub(r'^how is ([@#]\d+) is ', r'how is \1 ', c)   # "how is X is related to Y"
+    c = re.sub(r'^who among the following is ', 'who is ', c)
+    m = re.fullmatch(rf"how is {E} (?:related|connected) (?:to|with) {E} 's {REL}", c)   # "how is X related to Y 's wife"
+    if m and ch is not None and _rel(m.group(3)) and not _rel(m.group(3)).startswith('only'):
+        k = ch.new()
+        return f'{m.group(2)} {_rel(m.group(3))} {k} ; ask {k} {m.group(1)}'
+    m = re.fullmatch(rf"who is (?:the )?{REL} of {E} 's {REL}", c)   # "who is the son of X 's sister"
+    if m and ch is not None and _rel(m.group(1)) and _rel(m.group(3)) and not _rel(m.group(3)).startswith('only'):
+        k = ch.new()
+        return f'{m.group(2)} {_rel(m.group(3))} {k} ; who {k} {_rel(m.group(1))}'
     m = re.fullmatch(rf"how is {E} 's {REL} (?:related|connected) (?:to|with) {E}", c)   # someone unnamed is asked about
     if m and ch is not None and _rel(m.group(2)) and not _rel(m.group(2)).startswith('only'):
         k = ch.new()
@@ -236,6 +295,32 @@ def _part(p: str, ch, depth: int = 0):
     m = re.fullmatch(rf'{E} has (?:a|an) {REL}', p)   # "X has a daughter": someone unnamed
     if m and _rel(m.group(2)) and not _rel(m.group(2)).startswith('only'):
         return [f'{m.group(1)} {_rel(m.group(2))} {ch.new()}']
+    m = re.fullmatch(rf'{E} has (?:a|an) {REL} and (?:a|an) {REL}', p)   # "X has a brother and a niece"
+    if m and _rel(m.group(2)) and _rel(m.group(3)) and not any(_rel(g).startswith('only') for g in m.groups()[1:]):
+        return [f'{m.group(1)} {_rel(m.group(2))} {ch.new()}', f'{m.group(1)} {_rel(m.group(3))} {ch.new()}']
+    m = re.fullmatch(rf'{E} has (only one|one|a|an) (child|son|daughter) ,? who (.+)', p)   # "X has only one child , who belongs to ..."
+    if m:
+        x, det, r, rest = m.groups()
+        k = ch.new()
+        pred = _part(f'{k} {rest}', ch, depth + 1)
+        if pred:
+            return ([f'{x} has 1 {r}'] if 'one' in det else []) + [f'{x} {r} {k}'] + pred
+    m = re.fullmatch(rf"{E} 's {REL} has (?:a|an) {REL}", p)   # "X 's spouse has a brother"
+    if m and _rel(m.group(2)) and _rel(m.group(3)) and not _rel(m.group(3)).startswith('only'):
+        k1, k2 = ch.new(), ch.new()
+        return [f'{m.group(1)} {_rel(m.group(2))} {k1}', f'{k1} {_rel(m.group(3))} {k2}']
+    m = re.fullmatch(rf"{E} is married to (?:the {REL} of {E}|{E} 's {REL})", p)   # "X is married to the mother of Y"
+    if m:
+        r, y = (m.group(2), m.group(3)) if m.group(2) else (m.group(5), m.group(4))
+        if _rel(r) and not _rel(r).startswith('only'):
+            k = ch.new()
+            return [f'{y} {_rel(r)} {k}', f'{m.group(1)} spouse {k}']
+    m = re.fullmatch(rf'{E} (?:is|,) (?:an? |the )?{PROF}(?: ,)? and (?:is )?(.+)', p) or re.fullmatch(rf'{E} (?:is )?(.+?) and is (?:an? |the )?{PROF}', p)
+    if m:   # "X is a doctor and the father of Y": professions are dropped (read() refuses questions about them)
+        rest = m.group(3) if m.group(2) in PROFS else m.group(2)
+        got = _part(f'{m.group(1)} is {rest}' if not rest.startswith(('is ', 'has ')) else f'{m.group(1)} {rest}', ch, depth + 1)
+        if got:
+            return got
     m = re.fullmatch(rf"{E} 's {REL} {E} ,? (is .+|has .+)", p)   # "X 's brother Y , is the grandfather of ..."
     if m and _rel(m.group(2)):
         rest = _part(f'{m.group(3)} {m.group(4)}', ch, depth + 1)
@@ -322,6 +407,8 @@ def read(tokens, why=None) -> str | None:
         p = re.sub(r'^\( ?[a-z0-9] ?\) ', '', p)
         p = re.sub(r'^(?:pick|choose|select) the (?:right|correct) (?:choice|option|answer) from the (?:given )?options ,? (?:if )?', '', p)   # "(a) X is ..." clue labels
         if k == len(parts) - 1:
+            if re.search(rf'\b{PROF}s?\b', p):   # a question about professions: not in the fact language
+                return None
             q = question(p, ch)
             if q:
                 ask = q

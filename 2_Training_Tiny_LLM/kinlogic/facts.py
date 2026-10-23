@@ -10,6 +10,7 @@ Facts
     x opposite y | x same y                       genders differ / match
     x has N [side] REL                            exactly N such relatives ("has only daughters": has 0 son)
     members N | couples N | generations N | males N | females N | singles N   closed-family puzzle facts (singles: single parents)
+    x gen N                                       x is in generation N of the family (1: the oldest)
 Questions
     ask x y               how is y related to x?
     who x [side] REL      who is x's REL?
@@ -107,6 +108,8 @@ def parse_stmt(tk: list[str]) -> dict | None:
     if b == 'has':
         sr = _sided_rel(tk[3:], kin_only=True) if n >= 4 and tk[2].isdigit() else None
         return {'t': 'has', 'x': a, 'n': int(tk[2]), 'r': sr[1], 'side': sr[0]} if sr else None
+    if n == 3 and b == 'gen':   # "x gen 3": x belongs to the third generation (1: the oldest); exact readers only for now
+        return {'t': 'gen', 'x': a, 'n': int(tk[2])} if tk[2].isdigit() and int(tk[2]) >= 1 else None
     if n == 3 and b in ('opposite', 'same'):
         return {'t': b, 'x': a, 'y': tk[2]} if is_ent(tk[2]) and tk[2] != a else None
     y, r = tk[-1], tk[-2]

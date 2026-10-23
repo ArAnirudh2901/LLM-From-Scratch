@@ -386,6 +386,7 @@ class _Run:
     singles: int | None = None   # parents among the members whose spouse is not a member ("no single parent": 0)
     has: list = field(default_factory=list)
     extra: list = field(default_factory=list)
+    gens: list = field(default_factory=list)   # "x gen N"
 
     def tick(self) -> bool:
         self.steps += 1
@@ -460,7 +461,34 @@ def _final_ok(w6, run: _Run) -> bool:
         # separate groups may sit on any levels relative to each other: only too many is wrong
         if span > run.generations or (parts == 1 and span != run.generations):
             return False
+    if run.gens and not _gens_ok(w6, run):
+        return False
     return run.singles is None or _singles(w6, run) == run.singles
+
+
+def _gens_ok(w, run: _Run) -> bool:
+    """"x gen N": checked once x's group of members spans every generation (or is the whole family); open otherwise."""
+    members = set(_members(w, run))
+    for f in run.gens:
+        x = w.find(run.ids[f['x']])
+        level, todo = {x: 0}, [x]
+        while todo:
+            a = todo.pop()
+            for b, d in [(w.father(a), -1), (w.mother(a), -1), (w.spouse(a), 0)] + [(c, 1) for c in w.children(a)]:
+                if b >= 0 and b not in level:
+                    level[b] = level[a] + d
+                    todo.append(b)
+        ms = [level[m] for m in members if m in level]
+        if not ms:
+            continue
+        span = max(ms) - min(ms) + 1
+        whole = len(ms) == len(members)
+        if (run.generations and span == run.generations) or (not run.generations and whole):
+            if level[x] - min(ms) + 1 != f['n']:
+                return False
+        elif run.generations and level[x] - min(ms) + 1 > f['n']:   # already deeper than N below the top member seen
+            return False
+    return True
 
 
 def _levels_ok(w) -> bool:
@@ -999,6 +1027,8 @@ def solve(stmts: list[dict], label=lambda e: e, asks=(), parts=None, people=(), 
             run.links.append(s)
         elif t == 'has':
             run.has.append(s)
+        elif t == 'gen':
+            run.gens.append(s)
         elif t in ('members', 'couples', 'males', 'females', 'generations', 'singles'):
             setattr(run, t, s['n'])
     questions += [{'t': 'ask', 'x': x, 'y': y, 'picked': True} for x, y in asks]
