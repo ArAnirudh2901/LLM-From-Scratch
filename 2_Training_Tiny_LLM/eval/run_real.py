@@ -51,7 +51,11 @@ SYNONYMS = [(r'\bgrand[- ]?(uncle|aunt|nephew|niece)\b', r'great-\1'), (r'\bgran
 
 
 def _same_words(t):
-    t = re.sub(r'\s*\([^)]*\)', '', t.lower()).strip()   # glosses: "maternal uncle (mausa)", "(by marriage)"
+    t = t.lower().strip().rstrip('.')
+    t = re.sub(r'^(.+?)\s*\((paternal|maternal)\)$', r'\2 \1', t)   # "cousins (paternal)"
+    t = re.sub(r'\s*\([^)]*\)', '', t).strip()   # glosses: "maternal uncle (mausa)", "(by marriage)"
+    t = re.sub(r'^[a-z]\w* is (?:the |his |her )?(.+?) (?:of|to) [a-z]\w*$', r'\1', t)   # "p is father of q"
+    t = re.sub(r'\b(cousin|brother|sister|sibling)s$', r'\1', t)
     for a, b in SYNONYMS:
         t = re.sub(a, b, t)
     return t
@@ -67,7 +71,7 @@ def correct(r, res):
     if match_option(got, [('x', want)]) or match_option(want, [('x', got)]) or _same_words(got) == _same_words(want):
         return True
     mv_w, mv_g = option_moves(re.sub(r"^.*?\bis\s+\w+'s\s+", '', want)), option_moves(got)
-    return bool(mv_w and mv_g and [m for m, _ in mv_w] == [m for m, _ in mv_g])
+    return bool(mv_w and mv_g and len(mv_w) == len(mv_g) and all(a == c and (g is None or h is None or g == h) for (a, g), (c, h) in zip(mv_w, mv_g)))
 
 
 def run(read, rows, read_more=None, threshold=0.6):

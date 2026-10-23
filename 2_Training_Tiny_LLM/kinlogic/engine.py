@@ -1095,9 +1095,15 @@ def claim_holds(w: World, group: list[dict], ids: dict):
                     rel.append(r)
         if y in rel:
             return True if not f.get('only') or rel == [y] else False
-        neutral = [[st._replace(g=None) for st in q] for q in paths]
-        reach = any(y in w.follow(x, q) for q in neutral)
-        return None if reach and not w.g(y) else False
+        def maybe(q):   # like follow, but a still-open gender may become the step's one
+            cur = [w.find(x)]
+            for st in q:
+                outs = [w.father(c) for c in cur] + [w.mother(c) for c in cur] if st.m == 'U' else \
+                    [d for c in cur for d in w.children(c)] if st.m == 'D' else \
+                    [w.spouse(c) for c in cur] if st.m == 'S' else [d for c in cur for d in w.siblings(c)]
+                cur = list(dict.fromkeys(o for o in outs if o >= 0 and w.g(o) in (None, st.g) or o >= 0 and not st.g))
+            return cur
+        return None if any(y in maybe(q) for q in paths) else False
 
     def check(f, b):
         x, y = b.get(f.get('x')), b.get(f.get('y')) if f.get('y') else None
