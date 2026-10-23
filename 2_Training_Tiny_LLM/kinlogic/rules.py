@@ -124,6 +124,9 @@ def clause(c: str):
     m = re.fullmatch(rf'{E} is not (?:the )?{REL} of {E}', c)
     if m and _rel(m.group(2)):
         return [f'{m.group(3)} not {_rel(m.group(2))} {m.group(1)}']
+    m = re.fullmatch(rf"{E} is not {E} 's {REL}", c)
+    if m and _rel(m.group(3)):
+        return [f'{m.group(2)} not {_rel(m.group(3))} {m.group(1)}']
     m = re.fullmatch(rf'{E} (?:belongs? to|is (?:in|from|of)) (?:the )?{ORD} generation', c)   # "who belongs to the 3 rd generation"
     if m and _ord(m.group(2)):
         return [f'{m.group(1)} gen {_ord(m.group(2))}']
@@ -164,6 +167,26 @@ def clause(c: str):
                 return None
             out.append(f'{r}s {k}')
         return out if out and len({o.split()[0] for o in out}) == len(out) else None
+    m = re.fullmatch(rf'{E} has (\w+) (sons?|daughters?|brothers?|sisters?|children) and (\w+) (sons?|daughters?|brothers?|sisters?)', c)
+    if m and _num(m.group(2)) is not None and _num(m.group(4)) is not None:   # "X has two sons and one daughter"
+        one = lambda w: {'children': 'child'}.get(w, PLURAL.get(w, w))
+        return [f'{m.group(1)} has {_num(m.group(2))} {one(m.group(3))}', f'{m.group(1)} has {_num(m.group(4))} {one(m.group(5))}']
+    m = re.fullmatch(rf'{E} has (\w+) (brothers|sisters|sons|daughters)', c)   # "X has three brothers"
+    if m and _num(m.group(2)) not in (None, 1):
+        return [f'{m.group(1)} has {_num(m.group(2))} {PLURAL[m.group(3)]}']
+    m = re.fullmatch(rf'{E} and {E} are (?:the )?(only |two )?(daughters|sons|children) of (?:mr |mrs |ms )?{E}', c)
+    if m:   # "X and Y are the only daughters of Z" / "two children of Mrs Z"
+        r = {'children': 'child'}.get(m.group(4), PLURAL.get(m.group(4)))
+        return [f'{m.group(5)} {r} {m.group(1)}', f'{m.group(5)} {r} {m.group(2)}'] + ([f'{m.group(5)} has 2 {r}'] if m.group(3) else [])
+    m = re.fullmatch(rf"{E} is {E} 's {REL} and {E} 's {REL}", c)   # "X is A 's mother and B 's aunt"
+    if m and _rel(m.group(3)) and _rel(m.group(5)):
+        return [f'{m.group(2)} {_rel(m.group(3))} {m.group(1)}', f'{m.group(4)} {_rel(m.group(5))} {m.group(1)}']
+    m = re.fullmatch(rf'{E} is (?:the |a )?{REL} of {E} and has no (son|daughter|brother|sister|child)(?:ren|s)?', c)
+    if m and _rel(m.group(2)):   # "X is the father of Y and has no daughter"
+        return [f'{m.group(3)} {_rel(m.group(2))} {m.group(1)}', f'{m.group(1)} has 0 {m.group(4)}']
+    m = re.fullmatch(rf'{E} married to {E}', c)
+    if m:
+        return [f'{m.group(1)} spouse {m.group(2)}']
     m = re.fullmatch(rf'{E} is (?:a |an |the )?{PROF}', c)   # "X is a doctor"
     if m:
         return [f'{m.group(1)} prof {m.group(2)}']
@@ -271,6 +294,10 @@ ASK = [
 def question(c: str, ch=None):
     c = re.sub(r'^(?:then ,? |so ,? |in terms of relationship ,? )', '', c.strip())
     c = re.sub(r'^how is ([@#]\d+) is ', r'how is \1 ', c)   # "how is X is related to Y"
+    c = re.sub(r'^(?:to find|find out) (?=what|who|how)', '', c)
+    m = re.fullmatch(rf'who are (?:the )?(cousins|brothers|sisters|sons|daughters|children) of {E}', c)   # "who are the cousins of X"
+    if m:
+        return f"who {m.group(2)} {({'cousins': 'cousin', 'children': 'child'}).get(m.group(1), PLURAL.get(m.group(1)))}"
     c = re.sub(r'^who among the following (is|works as) ', r'who \1 ', c)
     m = re.fullmatch(rf'who (?:is|works as) (?:a |an |the )?{PROF}', c)   # "who is the doctor?"
     if m:
@@ -318,6 +345,23 @@ def _part(p: str, ch, depth: int = 0):
     got = clause(p) or head(p) or header(p) or chain(p, ch)
     if got or depth > 6:
         return got
+    p = re.sub(r'^([@#]\d+) too ', r'\1 ', p)   # "X too has a daughter named Y"
+    m = re.fullmatch(rf'(.+?)(?: ,)? (?:but|however)(?: ,)? (.+)', p)   # "X is the father of Y but Y is not his son"
+    if m and not re.search(r' (?:but|however) ', m.group(1)):
+        first = _part(m.group(1), ch, depth + 1)
+        subj = re.match(rf'{E} ', m.group(1))
+        if first and subj:
+            sec = m.group(2)
+            sec = re.sub(r"\b(?:his|her)\b", f"{subj.group(1)} 's", sec)
+            if sec.startswith('not '):   # "X is Y 's cousin but not the brother of Z"
+                sec = f'{subj.group(1)} is {sec}'
+            second = _part(sec, ch, depth + 1)
+            if second:
+                return first + second
+    m = re.fullmatch(rf"{E} ,? {E} 's {REL} ,? has (?:a|an|one) (son|daughter) {E} and (?:a|an|one) (son|daughter) {E}", p)
+    if m and _rel(m.group(3)):   # "X , Y 's sister , has a son A and a daughter B"
+        x, y, r, r1, a1, r2, a2 = m.groups()
+        return [f'{y} {_rel(r)} {x}', f'{x} {r1} {a1}', f'{x} {r2} {a2}']
     m = re.fullmatch(rf'{E} has (?:a|an) {REL}', p)   # "X has a daughter": someone unnamed
     if m and _rel(m.group(2)) and not _rel(m.group(2)).startswith('only'):
         return [f'{m.group(1)} {_rel(m.group(2))} {ch.new()}']
@@ -443,6 +487,17 @@ def read(tokens, why=None) -> str | None:
     text = re.sub(r"\b(does|do|is|has) n ' t\b|\b(does|do|is|has)n ' t\b", lambda m: (m.group(1) or m.group(2)) + ' not', text)
     parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas )|\? ', text) if p.strip()]
     parts = [p for p in parts if not INSTRUCTION.match(p.strip())]   # "answer the questions based on the information given below"
+    if parts:   # "..., then what is the relation of X with Y" / "how is X related to Y if Z has no siblings"
+        last = parts[-1]
+        m = re.fullmatch(r'(.+?) ,? then ((?:what|who|how) .+)', last)
+        if m:
+            parts[-1:] = [m.group(1), m.group(2)]
+        m = re.fullmatch(r'((?:what|who|how) .+?) ,? if (.+)', parts[-1])
+        if m:
+            parts[-1:] = [m.group(2), m.group(1)]
+        m = re.fullmatch(r'(.+?) ,? if (.+?) ,? ((?:what|who|how) .+)', parts[-1])
+        if m:
+            parts[-1:] = [m.group(1), m.group(2), m.group(3)]
     from .speech import _Chain
     facts, ask, ch = [], None, _Chain()
     for k, p in enumerate(parts):
