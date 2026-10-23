@@ -146,8 +146,8 @@ def _roman_set(text):
 
 # ---------- the answer ----------
 
-NAMES_DECIDE = os.environ.get('KIN_NAMES_DECIDE', '1') == '1'
-SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for spoken descriptions: dev +1.1, locked test -0.4 with r3; off until a better reader   # a name's gender is taken as given (real exam keys: +8 of 576 dev questions vs preferring 'cannot be determined')
+NAMES_DECIDE = os.environ.get('KIN_NAMES_DECIDE', '1') == '1'   # a name's gender is taken as given (real exam keys: +8 of 576 dev questions vs preferring 'cannot be determined')
+SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for spoken descriptions: dev +1.1, locked test -0.4 with r3; off until a better reader
 
 
 def answer(text: str, read, priors: dict | None = None) -> dict:
