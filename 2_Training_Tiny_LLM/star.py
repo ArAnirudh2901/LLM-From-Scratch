@@ -41,7 +41,13 @@ def main():
     dev = get_device()
     model, vocab = load(a.ckpt, dev)
     qs = [json.loads(l) for p in a.questions for f in glob.glob(p) for l in gzip.open(f, 'rt')]
+    from kinlogic.symgen import real_keys
+    import hashlib
+    blocked = real_keys()   # never a question worded like an evaluation question
     stats = collections.Counter()
+    n0 = len(qs)
+    qs = [q for q in qs if hashlib.sha1(' '.join(prepare(as_text(q))['tokens']).encode()).hexdigest() not in blocked]
+    stats['evaluation wording (refused)'] = n0 - len(qs)
     out = []
     for i in range(0, len(qs), a.bs):
         chunk = qs[i:i + a.bs]
@@ -52,7 +58,7 @@ def main():
             samples = generate(model, vocab, toks, dev, k=a.samples, sample=True, temperature=1.0)
         for q, p, b, s in zip(chunk, preps, beams, samples):
             key = 'abcde'[q['answer']]
-            exact = read_code(p['tokens'], p['options'], p['ents']) or _fits(read_rules(p['tokens']) or read_speech(p['tokens']))
+            exact = read_code(p['tokens'], p['options'], p['ents']) or _fits(read_rules(p['tokens']) or read_speech(p['tokens']), p['ents'])
             named = {t for t in p['tokens'] if t[0] == '@'}
             facts_in = lambda lf: sum(1 for f in lf.split(' ; ') if f.split()[:1] not in (['ask'], ['who'], ['count']))
             sizes = sorted(facts_in(lf) for lf, _ in list(b) + list(s))
