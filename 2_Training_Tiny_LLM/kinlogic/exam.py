@@ -181,6 +181,28 @@ def answer_adaptive(text: str, read, read_more, threshold: float = 0.6, priors: 
     return second if second.get('status') not in ('error',) else first
 
 
+def with_draft(tokens, draft: str, verdict: str):
+    """Correction input (build_corrections.py): the question, then a draft reading and the engine's verdict on it."""
+    return list(tokens) + ['draft', ':'] + draft.split() + ['check', ':', verdict]
+
+
+def answer_corrected(text: str, read, threshold: float = 0.6, priors: dict | None = None) -> dict:
+    """Re-read and correct: when no family fits the readings or the winning option holds less than `threshold` of
+    the vote, the reader reads again with its draft and the engine's verdict in view (a reader trained on
+    build_corrections.py rows); the second answer is kept when it fits."""
+    first = answer(text, read, priors)
+    status = first.get('status')
+    if status == 'error' or (status not in ('none', 'contradiction') and first.get('confidence', 1.0) >= threshold):
+        return first
+    draft = (first.get('facts') or '').split('  [')[0].strip()
+    if not draft:
+        return first
+    verdict = 'contradiction' if status in ('none', 'contradiction') else 'unsure'
+    main = prepare(text)['tokens']
+    second = answer(text, lambda batch: read([with_draft(t, draft, verdict) if t == main else t for t in batch]), priors)
+    return second if second.get('status') not in ('error', 'none', 'contradiction') else first
+
+
 def _answer(text: str, read, priors: dict | None = None) -> dict:
     """read may return one reading per question or several, best first, optionally with scores (mean log-probability
     per token). Every reading is solved; readings that fail (contradiction, no question) drop out; the rest vote for

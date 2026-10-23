@@ -92,6 +92,7 @@ class Reader(nn.Module):
         self.exit_gate = nn.Linear(n_embd, 1) if n_loop > 1 else None   # lambda_r: probability of stopping after loop r (PonderNet)
         self.loops_now = n_loop   # loops in use (set_loops): fewer while a loop curriculum ramps up, or to decode faster
         self.neft = 0.0   # NEFTune noise on input embeddings while training (Jain et al. 2023); set by train_reader
+        self.loop_noise = 0.0   # relative noise added at each later loop's start at test time (reader.generate samples)
         self.ln_f = RMSNorm(n_embd)
         if copy:
             self.copy_q = nn.Linear(n_embd, d_copy, bias=False)
@@ -111,6 +112,14 @@ class Reader(nn.Module):
         """(block, loop index, starts a loop) for every layer application, in order."""
         return [(blk, r, i == 0) for r in range(self.loops_now) for i, blk in enumerate(self.blocks)]
 
+    def _loop_in(self, x, r):
+        """Start of loop r: its embedding, plus small noise at test time when loop_noise is set (several different
+        readings from one looped reader, for the engine to vote on)."""
+        x = x + self.loop_emb[r]
+        if self.loop_noise and r > 0 and not self.training:
+            x = x + torch.randn_like(x) * self.loop_noise * x.float().pow(2).mean(-1, keepdim=True).sqrt().to(x.dtype)
+        return x
+
     def set_loops(self, r: int):
         self.loops_now = max(1, min(int(r), self.n_loop))
 
@@ -128,7 +137,7 @@ class Reader(nn.Module):
         hs, lams = [], []
         for r in range(self.loops_now):
             if self.loop_emb is not None:
-                x = x + self.loop_emb[r]
+                x = self._loop_in(x, r)
             for blk in self.blocks:
                 x, _ = blk(x, cos, sin)
             h = self.ln_f(x)
@@ -169,7 +178,7 @@ class Reader(nn.Module):
         cos, sin = self.cos[:T], self.sin[:T]
         for blk, r, first in self.passes():
             if first and self.loop_emb is not None:
-                x = x + self.loop_emb[r]
+                x = self._loop_in(x, r)
             x, _ = blk(x, cos, sin)
         return self.ln_f(x)
 
@@ -209,7 +218,7 @@ class Reader(nn.Module):
         cache = []
         for blk, r, first in self.passes():
             if first and self.loop_emb is not None:
-                x = x + self.loop_emb[r]
+                x = self._loop_in(x, r)
             x, kv = blk(x, cos, sin)
             cache.append(list(kv))
         h = self.ln_f(x)
@@ -237,7 +246,7 @@ class Reader(nn.Module):
                           torch.ones(len(tok), G, dtype=torch.bool, device=tok.device)], 1)[:, None, None, :]
         for li, (blk, r, first) in enumerate(self.passes()):
             if first and self.loop_emb is not None:
-                x = x + self.loop_emb[r]
+                x = self._loop_in(x, r)
             q, k, v = blk.attn.heads(blk.ln1(x), cos, sin)
             cache[li][0] = torch.cat([cache[li][0], k], 2)
             cache[li][1] = torch.cat([cache[li][1], v], 2)
