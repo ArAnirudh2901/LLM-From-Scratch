@@ -166,7 +166,7 @@ def build(a):
     os.makedirs(a.out, exist_ok=True)
     done = sorted(f for f in os.listdir(a.out) if f.startswith('shard_') and not f.endswith('.tmp.npy'))
     share = dict(kv.split('=') for kv in a.mix.split(','))
-    srcs = {'tiny': tiny_stories('train'), 'web': fineweb(range(a.web_shards)), 'domain': domain()}
+    srcs = {'tiny': tiny_stories('train'), 'web': fineweb(range(a.web_shards)), 'domain': domain(a.domain_src)}
     srcs = {k: srcs[k] for k in share}
     plan = {k: int(a.tokens * float(v)) for k, v in share.items()}
     prog_path = os.path.join(a.out, 'progress.json')   # documents used and tokens written per source (exact resume)
@@ -213,6 +213,7 @@ if __name__ == '__main__':
     b.add_argument('--tokens', type=int, default=400_000_000)
     b.add_argument('--mix', default='tiny=0.5,web=0.5')
     b.add_argument('--web_shards', type=int, default=4)
+    b.add_argument('--domain_src', default='data/dataset_v4', help='verified pool whose questions form the kinship text')
     b.add_argument('--workers', type=int, default=os.cpu_count() or 2)
     a = ap.parse_args()
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
