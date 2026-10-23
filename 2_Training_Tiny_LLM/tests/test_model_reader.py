@@ -56,3 +56,23 @@ def test_looped_reader_cached_decoding_matches_full_pass():
     lp = m.step(cache, idx[:, 8], torch.tensor([8, 8]), plen, 8, 1)
     assert len(cache) == 2 * 3 + 1   # one cache per layer application, plus the copy keys
     assert torch.allclose(lp0, full[:, 7], atol=1e-5) and torch.allclose(lp, full[:, 8], atol=1e-5)
+
+
+def test_ponder_loss_trains_the_exit_gate():
+    import torch
+    from model_reader import Reader
+    from reader import fact_losses
+
+    class V:
+        stoi = {'<c>': 3}
+    torch.manual_seed(0)
+    m = Reader(vocab_size=50, block_size=64, n_layer=2, n_head=2, n_embd=32, n_loop=3)
+    idx = torch.randint(5, 50, (2, 12))
+    idx[:, 6] = 3
+    tgt = torch.full((2, 12), -100)
+    tgt[:, 7:11] = idx[:, 8:12]
+    loss, _ = fact_losses(m, idx, tgt, torch.full((2, 12), -100), V)
+    loss.backward()
+    assert torch.isfinite(loss) and m.exit_gate.weight.grad.abs().sum() > 0
+    m.set_loops(1)
+    assert len(m.passes()) == 2

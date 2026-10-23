@@ -86,6 +86,8 @@ class Reader(nn.Module):
         self.drop = nn.Dropout(dropout)
         self.blocks = nn.ModuleList([Block(n_embd, n_head, hidden, dropout) for _ in range(n_layer)])
         self.loop_emb = nn.Parameter(torch.zeros(n_loop, n_embd)) if n_loop > 1 else None   # which pass the shared blocks are on
+        self.exit_gate = nn.Linear(n_embd, 1) if n_loop > 1 else None   # lambda_r: probability of stopping after loop r (PonderNet)
+        self.loops_now = n_loop   # loops used when decoding (set_loops); training always runs them all
         self.ln_f = RMSNorm(n_embd)
         if copy:
             self.copy_q = nn.Linear(n_embd, d_copy, bias=False)
@@ -103,7 +105,41 @@ class Reader(nn.Module):
 
     def passes(self):
         """(block, loop index, starts a loop) for every layer application, in order."""
-        return [(blk, r, i == 0) for r in range(self.n_loop) for i, blk in enumerate(self.blocks)]
+        return [(blk, r, i == 0) for r in range(self.loops_now) for i, blk in enumerate(self.blocks)]
+
+    def set_loops(self, r: int):
+        self.loops_now = max(1, min(int(r), self.n_loop))
+
+    def hidden_loops(self, idx):
+        """Normalised hidden states after every loop (deep supervision) and lambda_r per position."""
+        T = idx.size(1)
+        x = self.drop(self.tok_emb(idx))
+        cos, sin = self.cos[:T], self.sin[:T]
+        hs, lams = [], []
+        for r in range(self.n_loop):
+            if self.loop_emb is not None:
+                x = x + self.loop_emb[r]
+            for blk in self.blocks:
+                x, _ = blk(x, cos, sin)
+            h = self.ln_f(x)
+            hs.append(h)
+            lams.append(torch.sigmoid(self.exit_gate(h).float())[..., 0] if self.exit_gate is not None else torch.ones(h.shape[:-1], device=h.device))
+        return hs, lams
+
+    def fact_logprobs_loops(self, idx, mask, c_id: int):
+        """fact_logprobs after every loop: ([log-probs (N, V)] per loop, [lambda (N,)] per loop, last hidden states)."""
+        hs, lams = self.hidden_loops(idx)
+        b = mask.nonzero()[:, 0]
+        T = idx.size(1)
+        c = (idx == c_id).float().argmax(1)
+        pos = torch.arange(T, device=idx.device)
+        ok = (pos[None, :] >= 1) & (pos[None, :] < c[b][:, None])
+        out = []
+        for h in hs:
+            hv = h[mask]
+            logp_v = torch.log_softmax(self.head(hv).float(), -1)
+            out.append(self._mix(logp_v, hv, self.copy_k(h)[b], idx[b], ok) if self.copy else logp_v)
+        return out, [lam[mask] for lam in lams], hs[-1]
 
     @staticmethod
     def _init(m):

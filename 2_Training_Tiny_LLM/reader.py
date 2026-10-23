@@ -244,9 +244,25 @@ def decode(model, vocab: Vocab, inputs: list[list[str]], device, max_new: int = 
     return [r[0][0] for r in generate(model, vocab, inputs, device, k=1, max_new=max_new, bs=bs)]
 
 
+PONDER_PRIOR, PONDER_BETA = 0.5, 0.01   # geometric prior on the stopping loop and its weight (PonderNet, Banino et al. 2021)
+
+
 def fact_losses(model, idx, tgt, lm, vocab):
     """Mean cross-entropy of the facts (copy head included for v10) and of the question's words."""
-    if getattr(model, 'arch', None) == 'v10':
+    if getattr(model, 'arch', None) == 'v10' and getattr(model, 'n_loop', 1) > 1:   # looped reader: PonderNet loss
+        mt = tgt != -100
+        lps, lams, h = model.fact_logprobs_loops(idx, mt, vocab.stoi['<c>'])
+        y = tgt[mt][:, None]
+        nll = torch.stack([-lp.gather(1, y)[:, 0] for lp in lps], 1)              # (N, R): loss if stopping after loop r
+        lam = torch.stack(lams, 1).clamp(1e-4, 1 - 1e-4)
+        lam = torch.cat([lam[:, :-1], torch.ones_like(lam[:, -1:])], 1)          # the last loop always stops
+        keep = torch.cumprod(torch.cat([torch.ones_like(lam[:, :1]), 1 - lam[:, :-1]], 1), 1)
+        p = keep * lam                                                            # p_r: stop exactly after loop r
+        prior = torch.tensor([PONDER_PRIOR * (1 - PONDER_PRIOR) ** r for r in range(nll.size(1))], device=idx.device)
+        prior = prior / prior.sum()
+        kl = (p * ((p + 1e-9).log() - prior.log())).sum(1)
+        loss_f = (p * nll).sum(1).mean() + PONDER_BETA * kl.mean()
+    elif getattr(model, 'arch', None) == 'v10':
         mt = tgt != -100
         lp, h = model.fact_logprobs(idx, mt, vocab.stoi['<c>'])
         loss_f = F.nll_loss(lp, tgt[mt])
