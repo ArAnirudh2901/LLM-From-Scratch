@@ -430,7 +430,11 @@ def _finish(w, run: _Run):
     def counted(w1):   # in a closed family, unnamed relatives become members first, then counts are checked
         if closed:
             for w2 in _closed_family(w1, run):
-                yield from _has(w2, run.has, run, create=False)
+                for w3 in _has(w2, run.has, run):   # "W has only one child": a missing one is a member too
+                    if len(w3.roots()) == len(w2.roots()):
+                        yield w3
+                    else:
+                        yield from _closed_family(w3, run)
         else:
             for w2 in _has(w1, run.has, run):
                 yield from _closed_family(w2, run)
