@@ -442,9 +442,9 @@ def _finish(w, run: _Run):
                 yield from _closed_family(w2, run)
 
     for w2 in _identities(w, run):
-        for w4 in counted(w2):
-            for w4b in _role_totals(w4, run):
-                for w5 in _gender_totals(w4b, run):
+        for w3 in counted(w2):
+            for w4 in _identities(w3, run):   # closed-family merges can add relatives an "only" word must cover
+                for w5 in (w6 for w5a in _role_totals(w4, run) for w6 in _gender_totals(w5a, run)):
                     for w6 in _gender_links(w5, run.links, run):
                         if _final_ok(w6, run):
                             yield w6
@@ -997,7 +997,36 @@ def _assume(w: World, priors: dict, ids: dict):
 CLOSED_FEWEST = True
 
 
-def solve(stmts: list[dict], label=lambda e: e, asks=(), parts=None, people=(), priors=None, max_steps: int = 20000,
+CLOSED_COUPLES = True   # closed family: a member's child with a married member is the couple's child (exam convention)
+
+
+def solve(stmts, *args, **kw) -> dict:
+    """Solves, then in a closed family adds "the couple's child" facts every family agrees on and solves again."""
+    r = _solve(stmts, *args, **kw)
+    if not (CLOSED_COUPLES and r.get('ok') and r.get('worlds') and any(s['t'] == 'members' for s in stmts)):
+        return r
+    named = {}
+    for e, i in r['ids'].items():
+        if e.startswith('@'):
+            named.setdefault(i, e)
+    def proposals(w):
+        ent = {w.find(i): e for i, e in named.items()}
+        out = set()
+        for c, ce in ent.items():
+            for slot, other in (('fa', 'mo'), ('mo', 'fa')):
+                p = w.rel(c, slot)
+                if p >= 0 and w.rel(c, other) < 0 and p in ent and w.spouse(p) in ent:
+                    out.add((ent[w.spouse(p)], ce))
+        return out
+    common = set.intersection(*(proposals(w) for w in r['worlds']))
+    if not common:
+        return r
+    extra = [{'t': 'rel', 'x': x, 'r': 'child', 'y': y, 'neg': False, 'only': False, 'side': None} for x, y in sorted(common)]
+    r2 = _solve(list(stmts) + extra, *args, **kw)
+    return r2 if r2.get('ok') and r2.get('worlds') else r
+
+
+def _solve(stmts: list[dict], label=lambda e: e, asks=(), parts=None, people=(), priors=None, max_steps: int = 20000,
           max_families: int = 2000, smallest: bool = False) -> dict:
     """Solves parsed fact statements (facts.parse).
 
