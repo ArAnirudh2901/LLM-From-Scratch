@@ -69,6 +69,12 @@ def load_pool(patterns, exact_skip=True):
     return rows
 
 
+def mask_total(batch, vocab, device):
+    """Fact tokens in the whole batch (the token-level average spans every chunk)."""
+    _, tgt, _ = collate(batch, vocab.stoi['<pad>'], device)
+    return float((tgt != -100).sum())
+
+
 def real_reward(p, lf, key):
     from kinlogic.exam import _answer_one
     try:
@@ -189,26 +195,30 @@ def main():
                     batch.append(enc)
                     adv.append(x - m)   # Dr. GRPO: no division by the group's spread
         policy.train()
-        with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
-            loss = torch.zeros((), device=device)
-            if batch:
-                idx, tgt, _ = collate(batch, vocab.stoi['<pad>'], device)
-                lp, mask = fact_token_logprobs(policy, idx, tgt, vocab)
-                with torch.no_grad():
-                    ref_lp, _ = fact_token_logprobs(ref, idx, tgt, vocab)
-                A = torch.tensor(adv, device=device)[:, None]
+        opt.zero_grad(set_to_none=True)
+        loss_v = 0.0
+        if batch:   # chunks of 32 readings: one update, bounded memory (192 readings at once ran a T4 out of memory)
+            tot = max(1.0, mask_total(batch, vocab, 'cpu'))
+            for i in range(0, len(batch), 32):
+                with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
+                    idx, tgt, _ = collate(batch[i:i + 32], vocab.stoi['<pad>'], device)
+                    lp, mask = fact_token_logprobs(policy, idx, tgt, vocab)
+                    with torch.no_grad():
+                        ref_lp, _ = fact_token_logprobs(ref, idx, tgt, vocab)
+                A = torch.tensor(adv[i:i + 32], device=device)[:, None]
                 mask = mask.float()
-                pg = -(A * lp.float() * mask).sum() / mask.sum()   # token-level average (DAPO)
-                d = ((ref_lp - lp) * mask).float().clamp(-10, 10)   # k3 estimator explodes when one token's probability collapses
-                kl = ((torch.exp(d) - d - 1) * mask).sum() / mask.sum()
-                loss = pg + a.beta * kl
-            if a.sft_weight:
-                gold = [e for e in (encode_example(vocab, ex['tokens'], ex['lf'], cfg['block_size']) for ex in (gen.sample(rng) for _ in range(8))) if e]
+                d = ((ref_lp - lp).float() * mask).clamp(-10, 10)   # k3 estimator explodes when one token's probability collapses
+                part = (-(A * lp.float() * mask) + a.beta * (torch.exp(d) - d - 1) * mask).sum() / tot   # token-level average (DAPO)
+                scaler.scale(part).backward()
+                loss_v += part.item()
+        if a.sft_weight:
+            gold = [e for e in (encode_example(vocab, ex['tokens'], ex['lf'], cfg['block_size']) for ex in (gen.sample(rng) for _ in range(8))) if e]
+            with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
                 gi, gt, gl = collate(gold, vocab.stoi['<pad>'], device)
                 loss_f, _ = fact_losses(policy, gi, gt, gl, vocab)
-                loss = loss + a.sft_weight * loss_f
-        opt.zero_grad(set_to_none=True)
-        scaler.scale(loss).backward()
+            scaler.scale(a.sft_weight * loss_f).backward()
+            loss_v += a.sft_weight * loss_f.item()
+        loss = torch.tensor(loss_v)
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
         scaler.step(opt)
