@@ -198,8 +198,8 @@ def main():
                     ref_lp, _ = fact_token_logprobs(ref, idx, tgt, vocab)
                 A = torch.tensor(adv, device=device)[:, None]
                 mask = mask.float()
-                pg = -(A * lp * mask).sum() / mask.sum()   # token-level average (DAPO)
-                d = (ref_lp - lp) * mask
+                pg = -(A * lp.float() * mask).sum() / mask.sum()   # token-level average (DAPO)
+                d = ((ref_lp - lp) * mask).float().clamp(-10, 10)   # k3 estimator explodes when one token's probability collapses
                 kl = ((torch.exp(d) - d - 1) * mask).sum() / mask.sum()
                 loss = pg + a.beta * kl
             if a.sft_weight:
