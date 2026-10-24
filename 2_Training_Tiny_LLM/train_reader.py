@@ -131,12 +131,19 @@ def as_list(batch):
 
 
 def load_jsonl(path, n=None):
+    """Rows of a gzip JSON-lines file; a file another job is still appending to (a cut last block) gives its whole rows."""
     rows = []
-    with gzip.open(path, 'rt') as f:
-        for line in f:
-            rows.append(json.loads(line))
-            if n and len(rows) >= n:
-                break
+    try:
+        with gzip.open(path, 'rt') as f:
+            for line in f:
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:   # the cut line at the end
+                    break
+                if n and len(rows) >= n:
+                    break
+    except (EOFError, OSError) as e:
+        print(f'{path}: read {len(rows)} rows before {type(e).__name__} (still being written?)', flush=True)
     return rows
 
 
