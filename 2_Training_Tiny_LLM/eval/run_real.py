@@ -114,16 +114,32 @@ if __name__ == '__main__':
     ap.add_argument('--adaptive', type=float, default=None, help='re-read with beam 2k + 2k samples when the vote share is below this')
     ap.add_argument('--check', action='store_true', help='execution-guided beam: readings no family fits do not count toward k')
     ap.add_argument('--loop_noise', type=float, default=0.0, help='looped reader: relative noise at each later loop start (sampled readings)')
+    ap.add_argument('--perturb', type=int, default=0, help='also score N altered copies of each question (eval.perturb: shuffled options, renamed people, new code symbols)')
+    ap.add_argument('--loops', type=int, default=None, help='looped reader: most loops to run (default: all it was trained with)')
+    ap.add_argument('--halt', action='store_true', help='looped reader: stop early when the engine accepts the reading and the exit gate agrees (reader.answer_looped)')
     ap.add_argument('--correct', action='store_true', help='re-read and correct unsure readings (exam.answer_corrected; needs a reader trained on correction rows)')
     a = ap.parse_args()
     dev = get_device(force_cpu=a.cpu)
     model, vocab = load(a.ckpt, dev)
     model.loop_noise = a.loop_noise   # looped readers: different readings from noise at each later loop
+    if a.loops and getattr(model, 'n_loop', 1) > 1:
+        model.n_loop = a.loops   # answer_looped and generate stop here; beyond the trained depth repeats the last loop
+        model.set_loops(model.n_loop)
     rows = [r for r in load_real() if not a.split or split_of(r) == a.split][:a.limit]
     from kinlogic.codes import _fits
     chk = (lambda lf: _fits(lf) is not None) if a.check else None
     more = (lambda b: [x + y for x, y in zip(generate(model, vocab, b, dev, k=2 * a.k, check=chk), generate(model, vocab, b, dev, k=2 * a.k, sample=True, temperature=1.0))]) if a.adaptive else None
-    score, misses = run(lambda b: generate(model, vocab, b, dev, k=a.k, check=chk), rows, more, a.adaptive or 0.6, fix=a.correct)
-    print(json.dumps(score, indent=1))
+    read = lambda b: generate(model, vocab, b, dev, k=a.k, check=chk)
+    from reader import answer_looped
+    fn = (lambda text: answer_looped(text, model, vocab, dev, k=a.k)) if a.halt else None
+    score, misses = run(read, rows, more, a.adaptive or 0.6, fix=a.correct, answer_fn=fn)
+    print(json.dumps({k: v for k, v in score.items() if k != 'ok'}, indent=1))
+    if a.perturb:
+        from eval.perturb import compare, variants
+        from eval.real_clean import broken
+        pairs = variants(rows, a.perturb)
+        s1, _ = run(read, [v for _, v in pairs], more, a.adaptive or 0.6, fix=a.correct, answer_fn=fn)
+        score['perturbed'] = compare(rows, score['ok'], pairs, s1['ok'], split_of, broken)
+        print(json.dumps(score['perturbed'], indent=1))
     if a.out:
         json.dump({'score': score, 'misses': misses}, open(a.out, 'w'), indent=1)

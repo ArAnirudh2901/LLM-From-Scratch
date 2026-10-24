@@ -116,7 +116,7 @@ class Reader(nn.Module):
     def _loop_in(self, x, r):
         """Start of loop r: its embedding, plus small noise at test time when loop_noise is set (several different
         readings from one looped reader, for the engine to vote on)."""
-        x = x + self.loop_emb[r]
+        x = x + self.loop_emb[min(r, self.loop_emb.size(0) - 1)]   # past the trained depth: the last loop's embedding
         if self.loop_noise and r > 0 and not self.training:
             x = x + torch.randn_like(x) * self.loop_noise * x.float().pow(2).mean(-1, keepdim=True).sqrt().to(x.dtype)
         return x

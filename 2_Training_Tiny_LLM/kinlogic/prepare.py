@@ -167,7 +167,9 @@ def split_options(text: str) -> tuple[str, list[tuple[str, str]]]:
             end = seq[i + 1].start() if i + 1 < len(seq) else len(tail)
             opts.append(((m.group(1) or m.group(2)).lower(), tail[m.end():end].strip(' |;,')))
         statements = sum(1 for _, o in opts if _VERBISH.search(o) and len(o.split()) >= 4 and not o.lower().startswith(('only', 'both', 'either', 'neither', 'statement', 'all')))
-        if statements * 2 >= len(opts) and not (q >= 0 and lab == 'a'):   # lettered options after "?" may be statements
+        asked = lab == 'a' and ('(' in seq[0].group(0) or re.search(r'which (?:of the following|one)|following (?:statements?|is|are)\b|definitely|\b(?:true|correct)\b|what does',
+                                                                    head + tail[:seq[0].start()], re.I))
+        if statements * 2 >= len(opts) and not (q >= 0 and lab == 'a') and not asked:   # lettered statement options: after "?", "(a)" or a "which ... true" question
             continue
         found.append((seq[0].start(), opts))
     if found:
@@ -189,11 +191,24 @@ def _sentence_starts(toks: list[str]) -> set[int]:
     return starts
 
 
+ASKS = re.compile(r'(?:^|[.!"\u201d]\s*|\bthen\s+|,\s*|\s(?=(?-i:How|Who|Whom|Whose|What|Which|Find)\b))'
+                  r'(?:how|who|whom|whose|what|which|find|in what way|can you tell)\b[^.!?"\u201d]*$', re.I)
+
+
+def close_question(text: str) -> str:
+    """'How is A related to B' or '... to B.' at the end without its '?' (common on pages): the '?' put back."""
+    t = text.rstrip()
+    if '?' in t or not ASKS.search(t.rstrip('. ')):
+        return text
+    return t.rstrip('. ') + ' ?'
+
+
 def prepare(text: str, names: list[str] | None = None) -> dict:
     """Model input for a pasted question. names: extra strings to treat as people (the user's "add a name").
     Returns {tokens, ents: [{id, text, kind}], options, question}."""
     text = strip_boilerplate(normalize(text))
     text, options = split_options(text)
+    text = close_question(text)
     raw = []
     for t in TOKEN_RE.findall(text):   # "S-T" in a code expression is two letters, not one word
         if '-' in t and any(len(part) == 1 and part.isupper() for part in t.split('-')):
