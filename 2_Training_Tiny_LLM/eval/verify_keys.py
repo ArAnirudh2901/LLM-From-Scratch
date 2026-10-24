@@ -23,6 +23,7 @@ import urllib.error
 import urllib.request
 
 OUT = 'data/real_questions/keys_verified.json'
+SHARD = os.environ.get('VERIFY_SHARD', '')   # 'i/n': this process checks every n-th question (one Gemini key each)
 MODELS = os.environ.get('VERIFY_MODELS', 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview').split(',')
 REVIEW_MODELS = os.environ.get('REVIEW_MODELS', 'gemini-3.1-pro-preview,gemini-pro-latest').split(',') + MODELS
 CONVENTIONS = """Conventions of these exams: a person whose name is clearly male or female has that gender; pronouns and
@@ -86,9 +87,14 @@ def letter(x) -> str:
 def main():
     from eval.real_clean import broken
     from eval.run_real import as_text, load_real
-    done = json.load(open(OUT)) if os.path.exists(OUT) else {}
+    out = OUT.replace('.json', f".{SHARD.replace('/', 'of')}.json") if SHARD else OUT
+    done = json.load(open(out)) if os.path.exists(out) else {}
     rows = [r for r in load_real() if not broken(r) and r.get('options') and r.get('answer')]
-    save = lambda: json.dump(done, open(OUT, 'w'), indent=0)
+    if SHARD:
+        i, n = map(int, SHARD.split('/'))
+        others = json.load(open(OUT)) if os.path.exists(OUT) else {}   # already checked by the unsharded run
+        rows = [r for j, r in enumerate(rows) if j % n == i and qhash(r) not in others]
+    save = lambda: json.dump(done, open(out, 'w'), indent=0)
     todo = [r for r in rows if qhash(r) not in done]
     print(f'{len(rows)} keyed questions, {len(todo)} to check', flush=True)
     for i in range(0, len(todo), 8):   # 1: screen

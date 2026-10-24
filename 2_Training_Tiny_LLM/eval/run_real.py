@@ -78,7 +78,9 @@ def correct(r, res):
 def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None):
     from eval.real_clean import broken
     from eval.verify_keys import OUT as KEYS, qhash
-    keys = json.load(open(KEYS)) if os.path.exists(KEYS) else {}   # checked answer keys (eval.verify_keys)
+    keys = {}
+    for f in sorted(glob.glob(KEYS.replace('.json', '*.json'))):   # checked answer keys (eval.verify_keys, all shards)
+        keys.update(json.load(open(f)))
     by = collections.defaultdict(lambda: [0, 0])
     sp = collections.defaultdict(lambda: [0, 0])
     misses, oks = [], []
