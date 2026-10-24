@@ -115,6 +115,7 @@ if __name__ == '__main__':
     from train import get_device
     ap = argparse.ArgumentParser()
     ap.add_argument('--ckpt', required=True)
+    ap.add_argument('--ensemble', default='', help='more checkpoints, comma-separated: their readings join the vote')
     ap.add_argument('--cpu', action='store_true')
     ap.add_argument('--out', default=None)
     ap.add_argument('--limit', type=int, default=None, help='first N questions only (quick comparisons)')
@@ -142,6 +143,10 @@ if __name__ == '__main__':
     chk = (lambda lf: _fits(lf) is not None) if a.check else None
     more = (lambda b: [x + y for x, y in zip(generate(model, vocab, b, dev, k=2 * a.k, check=chk), generate(model, vocab, b, dev, k=2 * a.k, sample=True, temperature=1.0))]) if a.adaptive else None
     read = lambda b: generate(model, vocab, b, dev, k=a.k, check=chk)
+    if a.ensemble:   # more readers vote through the same engine: each adds its k readings
+        others = [load(c, dev) for c in a.ensemble.split(',')]
+        one = read
+        read = lambda b: [sum(z, []) for z in zip(one(b), *(generate(m, v, b, dev, k=a.k, check=chk) for m, v in others))]
     if a.by_sentence:
         from kinlogic.exam import with_split
         read = with_split(read)

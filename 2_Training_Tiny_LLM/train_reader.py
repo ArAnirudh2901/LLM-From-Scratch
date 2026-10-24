@@ -280,6 +280,7 @@ def main():
 
     ck = torch.load(latest, map_location='cpu', weights_only=False) if a.resume and os.path.exists(latest) else None
     sched = (ck or {}).get('sched') or {'decay_start': None, 'decay_len': None, 'flat': 0}
+    health = (ck or {}).get('health') or []   # one row per evaluation: losses, synthetic and real scores (fit_health)
     init = torch.load(a.init, map_location='cpu', weights_only=False) if not ck and a.init and os.path.exists(a.init) else None
     pre = init if init and init.get('merges') else None   # a pretrained model (pretrain_reader.py) brings its vocabulary and shape
     vocab = Vocab.from_ck(ck) if ck else Vocab.from_ck(pre) if pre else build_vocab(extra=(a.reworded or '').split(',')[0] or None)
@@ -407,7 +408,7 @@ def main():
         weights and the optimizer."""
         tmp = path + '.tmp'
         ck_ = {'model': (ema or model).state_dict(), 'config': cfg, 'vocab': vocab.itos, 'merges': vocab.merges, 'step': step, 'best': best,
-               'format': 'reader-v10' if cfg.get('arch') == 'v10' else 'reader-v9', 'meta': meta, 'sched': sched,
+               'format': 'reader-v10' if cfg.get('arch') == 'v10' else 'reader-v9', 'meta': meta, 'sched': sched, 'health': health,
                **(extra or {})}
         if resumable:
             ck_.update({'raw': model.state_dict() if ema else None, 'opt': opt.state_dict(), 'scaler': scaler.state_dict()})
@@ -417,6 +418,9 @@ def main():
     model.train()
     t0, seen = time.time(), 0
     pad = vocab.stoi['<pad>']
+    from fit_health import diagnose, must_stop
+    tl_sum, tl_n = 0.0, 0
+    held = [e for e in (encode_example(vocab, d['tokens'], d['lf'], cfg['block_size']) for d in dev[:256]) if e]   # fixed: held-out loss
     while step < a.steps:
         batch = next(it)
         parts = [batch[j::a.accum] for j in range(a.accum)] if a.accum > 1 else [batch]   # same batch, less memory per pass
@@ -441,6 +445,7 @@ def main():
                     pe.mul_(a.ema).add_(p_.detach(), alpha=1 - a.ema)
         step += 1
         seen += len(batch)
+        tl_sum, tl_n = tl_sum + loss_f.detach().float(), tl_n + 1
         if step % 100 == 0:
             el = time.time() - t0
             print(f'step {step:6d} | facts {loss_f.item():.4f} | words {loss_lm.item():.3f} | lr {lr_at(step):.2e} | '
@@ -479,6 +484,21 @@ def main():
                 score = acc + 0.01 * score if a.select_real else score + a.w_real * acc
                 line += f" | REAL dev {acc:.3f} ({len(sr['ok'])})"
             print(line + f" | by kind {r['kinds']}", flush=True)
+            hl = None
+            if cfg.get('arch') == 'v10' and held:   # teacher-forced loss on held-out generated questions
+                was = judge.training
+                judge.eval()
+                with torch.no_grad(), torch.autocast('cuda', dtype=torch.float16, enabled=amp):
+                    hl = sum(fact_losses(judge, *collate(held[i:i + 64], pad, device), vocab)[0].item() for i in range(0, len(held), 64)) / ((len(held) + 63) // 64)
+                judge.train(was)
+            health.append({'step': step, 'train_loss': float(tl_sum) / max(1, tl_n), 'heldout_loss': hl, 'synth': r['answer'],
+                           'real': acc if real_dev else None})
+            tl_sum, tl_n = 0.0, 0
+            flags = diagnose(health)
+            print(f"  health: train loss {health[-1]['train_loss']:.4f} | held-out loss {hl if hl is None else round(hl, 4)}"
+                  + ''.join(f' | {f}' for f in flags), flush=True)
+            with open(os.path.join(a.out, 'health.jsonl'), 'a') as f:
+                f.write(json.dumps({**health[-1], 'flags': flags}) + '\n')
             if score > best + a.min_delta:
                 sched['flat'] = 0
             else:
@@ -494,6 +514,9 @@ def main():
                       f"{sched['decay_len']} steps, then stopping", flush=True)
             save(latest)
             if sched['decay_start'] is not None and step >= sched['decay_start'] + sched['decay_len']:
+                break
+            if real_dev and must_stop(health):
+                print('  stopping: real dev falling while synthetic scores hold (memorizing the generator); best.pt keeps the best real dev', flush=True)
                 break
     print(f'done: {step} steps, best {best:.4f}', flush=True)
     index = os.path.join(os.path.dirname(a.out.rstrip('/')), 'index.jsonl')

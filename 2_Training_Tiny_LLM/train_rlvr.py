@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import copy
 import glob
+import gzip
 import json
 import os
 import random
@@ -44,8 +45,11 @@ def load_pool(patterns, exact_skip=True):
     rows = []
     for pat in patterns:
         for f in glob.glob(pat):
-            for line in open(f):
+            for line in (gzip.open(f, 'rt') if f.endswith('.gz') else open(f)):
                 r = json.loads(line)
+                if r.get('options') and isinstance(r['options'][0], str):   # symgen format: option texts, key index
+                    r = {**r, 'options': [[l, t] for l, t in zip('abcde', r['options'])],
+                         'answer': 'abcde'[int(r['answer'])] if str(r.get('answer', '')).isdigit() else r.get('answer')}
                 if not r.get('answer') or not r.get('options') or r['answer'] not in [l for l, _ in r['options']]:
                     continue
                 if r.get('key_status', 'confirmed') not in ('confirmed-exact', 'confirmed', 'corrected', 'agreed'):
@@ -130,6 +134,7 @@ def main():
         return sum(sr['ok']) / max(1, len(sr['ok']))
 
     best, flat, order, pos = real_dev(), 0, [], 0
+    hist, win = [], []   # (mean reward, real dev) per evaluation: reward rising while real dev falls = overfitting
     print(f'[start] REAL dev {best:.3f}', flush=True)
     torch.save({**ck, 'step_rl': 0, 'real_dev': best}, os.path.join(a.out, 'best.pt'))
     t0 = time.time()
@@ -200,12 +205,16 @@ def main():
         torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
         scaler.step(opt)
         scaler.update()
+        win += rewards
         if step % 10 == 0:
             print(f'step {step:5d} | reward {sum(rewards) / max(1, len(rewards)):.3f} | groups with signal {kept}/{len(groups)} | '
                   f'loss {loss.item():.4f} | {(time.time() - t0) / 60:.1f} min', flush=True)
         if step % a.eval_every == 0 or step == a.steps:
             acc = real_dev()
-            print(f'[eval {step}] REAL dev {acc:.3f} (best {best:.3f})', flush=True)
+            hist.append((sum(win) / max(1, len(win)), acc))
+            win = []
+            warn = ' | health: reward up, real dev down (reward overfitting)' if len(hist) >= 3 and hist[-1][0] > hist[-3][0] and hist[-1][1] < best - 0.02 and hist[-2][1] < best - 0.02 else ''
+            print(f'[eval {step}] REAL dev {acc:.3f} (best {best:.3f}) | mean reward {hist[-1][0]:.3f}{warn}', flush=True)
             if acc > best + 1e-9:
                 best, flat = acc, 0
                 torch.save({**ck, 'model': policy.state_dict(), 'step_rl': step, 'real_dev': acc}, os.path.join(a.out, 'best.pt'))

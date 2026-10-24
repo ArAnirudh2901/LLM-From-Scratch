@@ -51,3 +51,32 @@ Measured: synthetic held-out 96-99.8% but real 62-67% (r4 and r5 alike): the rea
 - Constrained decoding and output close to the input order (Shin et al. 2021; Rongali et al. 2022) -> --of_form.
 - Architecture surveys (Hymba 2024 meta tokens + SSM heads, Differential Transformer 2024, MobileLLM deep-thin): gains
   are in pretraining-scale language modelling; none targets style memorization in a small fine-tuned parser.
+
+## 2026-10-24: what can take real-question accuracy to 85% (second research pass)
+
+No method guarantees a number. RL, voting, reranking and test-time RL only make the reader pick readings it can
+already write (Yue et al. 2025; TTRL is bounded by majority-vote accuracy), so the ceiling is reading coverage: the
+share of real questions where some reading reaches the key (`eval.oracle_real`). Coverage on real wording grows only
+with training data in that wording. Ranked by evidence for our setting:
+
+1. Real-distribution data, targeted at failures. *Bridging the Gap between Synthetic and Natural Questions via
+   Sentence Decomposition* (TACL 2023): a parser trained on synthetic data gains +7.9 / +8.9 on natural questions once
+   natural wording is bridged. LLM2LLM (ACL Findings 2024): train, collect the student's failures, have a teacher
+   write new examples like each failure, retrain; large gains in the low-data regime. TinyGSM (2023): a 1.3B model
+   passes 80% on GSM8K through a large teacher-written dataset plus a verifier: data, not size. Saparina & Lapata
+   (EACL 2024): LLM natural-language variation of training questions. -> more crawled real questions
+   (`build_real_train.py`), STaR on them, LLM2LLM rounds on dev failure patterns (Gemini writes questions, our
+   engine checks the teacher's facts against its key).
+2. Unlabeled target-domain RL. TTRL (NeurIPS 2025): majority vote over sampled answers as the reward on unlabeled
+   questions; pass@1 rises toward and past maj@n. Unkeyed scraped questions become usable: reward = agreement with
+   the engine majority across readings and altered versions.
+3. Input-side diversity at test time. *Test-Time Augmentation for LLMs* (2026): meaning-preserving rephrasings beat
+   extra samples at equal compute. Our altered copies only rename people and symbols, which placeholders make
+   invisible to the reader; useful variants must change the token sequence (statement order where facts are
+   independent, "X's father" vs "the father of X").
+4. Ensembles of checkpoints voting through the engine, verifier reranking (LEVER; oracle gap shows the room).
+5. Structure-aware data: CSL (Qiu et al. NAACL 2022) and structurally diverse sampling (Oren et al. EMNLP 2021):
+   cover structures, not more of the same templates.
+6. Test-time training (Akyürek et al. ICML 2025 for ARC; TTT-NN, ICLR 2024): per-question fine-tuning; too heavy for
+   the browser, possible offline.
+Architecture (pre-v3: more heads, partial RoPE, AttnRes): expected 0-2 points; the bottleneck is wording coverage.
