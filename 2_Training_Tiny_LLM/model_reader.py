@@ -44,9 +44,11 @@ class Attention(nn.Module):
             q, k = self.q_norm(q), self.k_norm(k)
         return rope(q, cos, sin), rope(k, cos, sin), v
 
-    def forward(self, x, cos, sin):
+    def forward(self, x, cos, sin, mask=None):
         q, k, v = self.heads(x, cos, sin)
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0)
+        drop = self.dropout if self.training else 0.0
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=drop) if mask is None else \
+            F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=drop)
         return self.proj(y.transpose(1, 2).reshape(x.shape)), (k, v)
 
 
@@ -69,8 +71,8 @@ class Block(nn.Module):
         self.attn = Attention(d, n_head, dropout, qk_norm)
         self.ffn = SwiGLU(d, hidden, dropout)
 
-    def forward(self, x, cos, sin):
-        a, kv = self.attn(self.ln1(x), cos, sin)
+    def forward(self, x, cos, sin, mask=None):
+        a, kv = self.attn(self.ln1(x), cos, sin, mask)
         x = x + a
         return x + self.ffn(self.ln2(x)), kv
 
@@ -80,9 +82,11 @@ class Reader(nn.Module):
 
     def __init__(self, vocab_size: int, block_size: int, n_layer: int = 6, n_head: int = 6, n_embd: int = 384,
                  dropout: float = 0.0, copy: bool = True, d_copy: int = 128, rope_base: float = 10000.0, arch='v10',
-                 n_loop: int = 1, qk_norm: bool = False):
+                 n_loop: int = 1, qk_norm: bool = False, prefix_lm: bool = False):
         super().__init__()
         self.n_loop = n_loop   # looped reader: the whole stack runs n_loop times with shared weights (Universal Transformer)
+        self.prefix_lm = prefix_lm   # the question attends both ways (prefix LM, T5/UL2); facts stay causal
+        self.c_id = None   # id of '<c>' (end of the question); set by whoever loads the vocabulary
         self.block_size, self.copy, self.d_copy = block_size, copy, d_copy
         hidden = int(8 * n_embd / 3 + 63) // 64 * 64
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
@@ -108,6 +112,16 @@ class Reader(nn.Module):
         for n, p in self.named_parameters():   # residual projections start small (GPT-2 scaling)
             if n.endswith(('proj.weight', 'w2.weight')):
                 nn.init.normal_(p, 0.0, 0.02 / math.sqrt(2 * n_layer * n_loop))
+
+    def attn_mask(self, idx):
+        """None (causal) or, for a prefix LM, a (B, 1, T, T) mask: the question (up to '<c>') sees all of itself."""
+        if not self.prefix_lm or self.c_id is None:
+            return None
+        T = idx.size(1)
+        c = (idx == self.c_id).float().argmax(1)[:, None, None]
+        pos = torch.arange(T, device=idx.device)
+        i, j = pos[None, :, None], pos[None, None, :]
+        return ((j <= i) | ((j <= c) & (i <= c)))[:, None]
 
     def passes(self):
         """(block, loop index, starts a loop) for every layer application, in order."""
@@ -136,6 +150,7 @@ class Reader(nn.Module):
         x = self._embed(idx)
         cos, sin = self.cos[:T], self.sin[:T]
         hs, lams = [], []
+        am = self.attn_mask(idx)
         cut = self.loops_now - self.grad_loops if self.training and self.grad_loops else 0
         for r in range(self.loops_now):
             # truncated backprop through depth (Huginn; retrofitted recurrence): any depth costs grad_loops loops of memory
@@ -143,7 +158,7 @@ class Reader(nn.Module):
                 if self.loop_emb is not None:
                     x = self._loop_in(x, r)
                 for blk in self.blocks:
-                    x, _ = blk(x, cos, sin)
+                    x, _ = blk(x, cos, sin, am)
                 h = self.ln_f(x)
             hs.append(h)   # gate and heads below still learn from early loops
             lams.append(torch.sigmoid(self.exit_gate(h).float())[..., 0] if self.exit_gate is not None else torch.ones(h.shape[:-1], device=h.device))
@@ -180,10 +195,11 @@ class Reader(nn.Module):
         T = idx.size(1)
         x = self._embed(idx)
         cos, sin = self.cos[:T], self.sin[:T]
+        am = self.attn_mask(idx)
         for blk, r, first in self.passes():
             if first and self.loop_emb is not None:
                 x = self._loop_in(x, r)
-            x, _ = blk(x, cos, sin)
+            x, _ = blk(x, cos, sin, am)
         return self.ln_f(x)
 
     def _mix(self, logp_v, h, keys, ids, ok):
@@ -220,10 +236,15 @@ class Reader(nn.Module):
         x = self.tok_emb(idx)
         cos, sin = self.cos[:P], self.sin[:P]
         cache = []
+        am = None
+        if self.prefix_lm:   # the prompt is all question: every real position sees every other
+            real = torch.arange(P, device=idx.device)[None, :] < plen[:, None]
+            am = (real[:, None, :] & real[:, :, None]) | torch.eye(P, dtype=torch.bool, device=idx.device)[None]
+            am = am[:, None]
         for blk, r, first in self.passes():
             if first and self.loop_emb is not None:
                 x = self._loop_in(x, r)
-            x, kv = blk(x, cos, sin)
+            x, kv = blk(x, cos, sin, am)
             cache.append(list(kv))
         h = self.ln_f(x)
         rows = torch.arange(B, device=idx.device)

@@ -33,7 +33,9 @@ def load(ckpt, device):
     model = make_model(ck['config']).to(device)
     model.load_state_dict(ck['model'])
     model.eval()
-    return model, Vocab.from_ck(ck)
+    vocab = Vocab.from_ck(ck)
+    model.c_id = vocab.stoi.get('<c>')   # prefix-LM readers need the end of the question
+    return model, vocab
 
 
 def first(lf, people=()):

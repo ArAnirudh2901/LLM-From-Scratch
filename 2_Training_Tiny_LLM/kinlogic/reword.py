@@ -238,9 +238,25 @@ def _numbered(texts):
     return '\n\n'.join(f'Question {i + 1}: {t}' for i, t in enumerate(texts))
 
 
-def reword_batch(exs: list[dict], provider: str) -> list[dict | None]:
+STYLES = [   # one per batch with --styles: many surface forms per meaning (Saparina & Lapata 2024; back-translation, NAACL 2024)
+    'as terse SSC-exam questions with as few words as possible',
+    "as bank-PO style puzzles opening with 'Study the following information carefully' and full sentences",
+    "as short stories or conversations ('While looking at an old photo album, ...')",
+    'in sloppy web formatting: missing punctuation, speech without quote marks, run-on sentences, lowercase',
+    "using possessive chains (\"X's mother's brother\") wherever the text says 'X is the R of Y'",
+    "using relative clauses and apposition ('A, whose father is B, ...', 'B, the son of C, ...')",
+    'with the question asked first and the facts after it',
+    'using he/she/his/her wherever it stays unambiguous, and varied verbs (has, is married to, is the only child of)',
+    'mixing very short and very long sentences, and sometimes listing several facts in one sentence',
+]
+
+
+def reword_batch(exs: list[dict], provider: str, style: str | None = None) -> list[dict | None]:
     """Rewrites and readings for several questions in two requests; the same checks as reword_one for each."""
-    raw = call(REWRITE_BATCH.format(n=len(exs), questions=_numbered([e['text'] for e in exs])), provider, temperature=0.7, json_out=True)
+    prompt = REWRITE_BATCH.format(n=len(exs), questions=_numbered([e['text'] for e in exs]))
+    if style:
+        prompt = prompt.replace('Return JSON only:', f'Write every rewrite {style}.\nReturn JSON only:', 1)
+    raw = call(prompt, provider, temperature=0.9 if style else 0.7, json_out=True)
     try:
         news = [clean(str(t)) for t in json.loads(re.search(r'\{.*\}', raw, re.S).group(0))['rewrites']]
     except (AttributeError, ValueError, KeyError, TypeError):
@@ -303,6 +319,7 @@ def main():
     ap.add_argument('--provider', default='gemini' if os.environ.get('GEMINI_API_KEY') else 'anthropic')
     ap.add_argument('--pause', type=float, default=6.0, help='seconds between batches (two requests each, one per model)')
     ap.add_argument('--batch', type=int, default=10, help='questions per request (1 = one request per question)')
+    ap.add_argument('--styles', action='store_true', help='each batch in a randomly chosen exam style (STYLES): more surface variety per meaning')
     a = ap.parse_args()
     files = [f for f in sorted(glob.glob(f'{a.src}/**/*.jsonl.gz', recursive=True)) if '/test/' not in f]   # never the locked test
     rng = random.Random(0)
@@ -328,7 +345,7 @@ def main():
     while i < len(todo) and kept + len(done) < a.n:
         batch = todo[i:i + a.batch]
         try:
-            got = reword_batch(batch, a.provider) if a.batch > 1 else [reword_one(batch[0], a.provider)]
+            got = reword_batch(batch, a.provider, random.choice(STYLES) if a.styles else None) if a.batch > 1 else [reword_one(batch[0], a.provider)]
         except Exception as e:   # rate limit or network: back off (longer each time), retry the same batch
             waits += 1
             print('call failed:', type(e).__name__, str(e)[:100], f'- waiting {min(600, 20 * 2 ** min(waits, 5))}s', flush=True)

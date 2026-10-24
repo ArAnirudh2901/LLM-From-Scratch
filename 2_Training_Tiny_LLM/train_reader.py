@@ -253,6 +253,10 @@ def main():
     ap.add_argument('--n_layer', type=int, default=6)
     ap.add_argument('--n_loop', type=int, default=None, help='looped reader: run the layer stack this many times (shared weights)')
     ap.add_argument('--loop_curriculum', default='', help="loops by share of the budget, e.g. '1:0,2:0.25,3:0.5' (retrofitted recurrence, McLeish et al. 2025)")
+    ap.add_argument('--real_dev', type=int, default=0, help='score this many real dev questions (data/real_questions, fair items) at every evaluation')
+    ap.add_argument('--select_real', action='store_true', help='pick the best checkpoint and stop early by the real dev score (synthetic scores only break ties)')
+    ap.add_argument('--w_real', type=float, default=1.0, help='weight of the real dev score in the pick score when not --select_real')
+    ap.add_argument('--prefix_lm', action='store_true', help='the question attends both ways (prefix LM, as T5/UL2 encoders); facts stay causal')
     ap.add_argument('--of_form', action='store_true', help="facts in the text's order where the text says 'y is the REL of x' (facts.align_of)")
     ap.add_argument('--loop_random', action='store_true', help='looped reader: each step runs a random number of loops up to the curriculum cap, so every depth is practised and the gate can stop anywhere')
     ap.add_argument('--grad_loops', type=int, default=0, help='looped reader: gradients through the last N loops only (truncated backprop; 0: all)')
@@ -292,7 +296,10 @@ def main():
         cfg = {**cfg, 'n_loop': a.n_loop}
     if a.qk_norm and not ck:
         cfg = {**cfg, 'qk_norm': True}
+    if a.prefix_lm and not ck:
+        cfg = {**cfg, 'prefix_lm': True}
     model = make_model(cfg).to(device)
+    model.c_id = vocab.stoi['<c>']
     if ck:
         model.load_state_dict(ck.get('raw') or ck['model'])
     elif a.init and os.path.exists(a.init):
@@ -345,6 +352,14 @@ def main():
     authored = authored_examples(('train',)) if a.p_authored > 0 else []
     pool = load_pool(a.pool) if a.pool and os.path.isdir(a.pool) else None
     rw_dev = load_jsonl(a.reworded_dev) if a.reworded_dev and os.path.exists(a.reworded_dev) else []
+    real_dev = []
+    if a.real_dev:
+        from eval.run_real import load_real, split_of
+        from eval.real_clean import broken
+        rows = [r for r in load_real() if split_of(r) == 'dev' and not broken(r)]
+        random.Random(7).shuffle(rows)
+        real_dev = rows[:a.real_dev]
+        print(f'real dev questions for selection: {len(real_dev)}', flush=True)
     extra = [(f.split('*')[0], int(f.split('*')[1]) if '*' in f else 1) for f in (a.reworded or '').split(',') if f]
     extra = [(f, k) for f, k in extra if os.path.exists(f)]   # rewrites, STaR rows, minimal pairs; 'file*3' repeats a file
     if pool and extra:
@@ -452,6 +467,17 @@ def main():
                 rr, _ = evaluate(judge, vocab, device, rw_dev)
                 score += a.w_reworded * rr['answer']
                 line += f" | reworded dev answer {rr['answer']:.3f}"
+            if real_dev:   # real exam questions (scored only, never trained on): the measure that matters
+                from eval.run_real import run as run_real
+                from reader import generate as _gen
+                was = judge.training
+                judge.eval()
+                with torch.no_grad():
+                    sr, _ = run_real(lambda b: _gen(judge, vocab, b, device, k=4), real_dev)
+                judge.train(was)
+                acc = sum(sr['ok']) / max(1, len(sr['ok']))
+                score = acc + 0.01 * score if a.select_real else score + a.w_real * acc
+                line += f" | REAL dev {acc:.3f} ({len(sr['ok'])})"
             print(line + f" | by kind {r['kinds']}", flush=True)
             if score > best + a.min_delta:
                 sched['flat'] = 0
