@@ -85,7 +85,13 @@ _BOILER = [re.compile(p, re.I) for p in (
     r'^\s*directions?\s*(?:\([^)]*\))?\s*:\s*[^.?!]*[.?!]\s*',
     r'^\s*(?:study|read)\s+the\s+(?:following\s+)?information\s+carefully[^.?!:]*[.?!:]\s*',
     r'^\s*\d+\s*[.)]\s+(?=[A-Z])',
+    r'^[^.?!]*\btype of questions?\b[^.?!]*[.?!]\s*',   # lesson text before the question ("In this type of questions, ...")
+    r'^[^.?!]*\bround-about description\b[^.?!]*[.?!]\s*',
+    r'^\s*the last step is[^.?!]*[.?!]\s*',
 )]
+CITATION = re.compile(r'[\[(][^\[\]()]{0,40}?\b(?:19|20)\d\d\b[^\[\]()]{0,12}[\])]')   # "[I.A.S. 2003]", "(SSC CGL 2017)"
+SAYS = {'said', 'says', 'told', 'tells', 'remarked', 'remarks', 'replied', 'replies', 'asked', 'asks', 'stated', 'states', 'explains', 'explained', 'notes', 'noted'}
+QUOTES = {'"', '\u201c', '\u201d', "'", '\u2018', '\u2019'}
 
 
 REL_WORD = r'(?:son|daughter|brother|sister|father|mother|husband|wife|uncle|aunt|nephew|niece|cousin|grand(?:son|daughter|father|mother|child))'
@@ -115,6 +121,7 @@ def normalize(text: str) -> str:
     text = re.sub(r'\b([A-Z])\.([A-Z]) (?=is |was |has )', r'\1. \2 ', text)   # "grandfather of U.Q is the brother"
     text = re.sub(r"\b(mother|father|brother|sister|son|daughter|wife|husband)s's\b", r"\1's", text)   # "mothers's"
     text = re.sub(r'\baunty\b', 'aunt', text, flags=re.I)
+    text = re.sub(r"([a-z])\s?\?\s?s\b(?=\s+[a-z])", r"\1's", text)   # "son?s uncle": a lost apostrophe
     for a, b in TYPOS:   # common page misspellings of relation words
         text = re.sub(a, b, text, flags=re.I)
     if re.search(r'\bmeans?\b', text):   # digit code symbols glued to letters: "P5Q", "F3M5N3K"
@@ -129,6 +136,7 @@ def normalize(text: str) -> str:
 
 
 def strip_boilerplate(text: str) -> str:
+    text = CITATION.sub(' ', text)
     for _ in range(3):
         before = text
         for r in _BOILER:
@@ -230,6 +238,7 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
     letter_names = sum(1 for x in raw if re.fullmatch(r'[A-HJ-Z]', x)) >= 2
     ents, by_text, by_head = [], {}, {}
     out = []
+    in_quote, speaker = False, None   # "that man" inside a quote is not the man speaking it
 
     def ent(key, surface, kind):
         if key in by_text:
@@ -260,9 +269,12 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
         elif low in extra:
             kind = 'name'
         elif re.fullmatch(r'[A-Za-z][A-Za-z-]*', t) and len(t) > 1 and low not in COMMON and not (t.isupper() and len(t) <= 6 and low not in extra):
-            if t[0].isupper():
+            kin_word = low in KIN_TITLES or (low.endswith('s') and low[:-1] in KIN_TITLES)   # "Brothers and Sisters"
+            if t[0].isupper() and kin_word:
+                pass
+            elif t[0].isupper():
                 if i in starts:
-                    if low not in LEXICON and low not in KIN_TITLES:
+                    if low not in LEXICON and nxt not in NOT_A_NAME_NEXT | {'how', 'what', 'which', 'whom', 'whether', 'if', 'his', 'her', 'their', 'my', 'your'}:   # "Determine the relationship"
                         kind = 'name'
                     elif low in AMBIGUOUS_NAMES and nxt not in NOT_A_NAME_NEXT:
                         kind = 'name'
@@ -276,6 +288,10 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
             i += 1
             continue
         out.append(low)
+        if t in QUOTES and not (t in ("'", '\u2019') and i and raw[i - 1][-1:].isalpha() and i + 1 < len(raw) and raw[i + 1][:1].isalpha()):
+            in_quote = not in_quote
+        if low in SAYS and not in_quote:
+            speaker = next((w for w in reversed(out[:-1]) if w[:1] == '@'), None)
         # descriptions: "a man" / "an old lady" make a new person; "the man" / "that lady" the last one
         prev = raw[i - 1].lower() if i else ''
         predicate = low in DET_NEW and prev in COPULA and not (i >= 2 and raw[i - 2].lower() == 'there')   # "X is a boy" names no one new
@@ -286,7 +302,7 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
             if j < len(raw) and raw[j].lower() in HEADS:
                 head = raw[j].lower()
                 out += [w.lower() for w in raw[i + 1:j + 1]]
-                if low in DET_BACK and head in by_head:
+                if low in DET_BACK and head in by_head and not (in_quote and low in ('that', 'this') and by_head[head] == speaker):
                     e = by_head[head]
                 else:
                     e = ent(f'desc:{len(ents)}', ' '.join(raw[i:j + 1]), 'desc')
