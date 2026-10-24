@@ -30,3 +30,24 @@ the generator never writes. The papers below decide the next steps.
 
 Measurement: real questions split into dev (error analysis only) and a locked test half (`eval.run_real`), broken
 scrapes reported apart (`eval/real_clean.py`); synthetic unseen set (`eval/unseen_set.py`) and held-out rewrites.
+
+## 2026-10-24: why r5 did not beat r4 on real questions, and what the literature says to do
+
+Measured: synthetic held-out 96-99.8% but real 62-67% (r4 and r5 alike): the reader fits the generator's style
+(template memorization), not real wording. On dev, exact readers cover 54% at 89%; the model covers 46% at 42%.
+- Chu et al. 2025, *SFT Memorizes, RL Generalizes* (ICML): SFT memorizes training rules and styles; RL with an
+  outcome reward generalizes to unseen variants. -> GRPO with the engine's answer as reward on real-style keyed questions
+  (train_rl.py), evaluated on real dev, after SFT.
+- Saparina & Lapata 2024 (EACL), *Improving Generalization in Semantic Parsing by Increasing Natural Language Variation*:
+  LLM-written variation of training questions fixes brittleness to rewording. -> reword --styles (9 exam styles).
+- NAACL 2024, *Simple and effective data augmentation for compositional generalization*: sample meaning representations
+  broadly (uniform), back-translate to text; beats sampling from the training distribution.
+- Data Factors for Better Compositional Generalization (2023): diverse and harder examples beat more examples.
+- Consistency Regularization Training for Compositional Generalization (ACL 2023): consistent predictions across
+  perturbed inputs; word dropout (--unk_p) is the cheap form.
+- ReST^EM / STaR (Zelikman 2022; Singh et al. 2023): self-training filtered by a verifiable answer: star.py at scale.
+- Prefix LM / encoder-decoder (T5, UL2; Furrer et al. 2020 on compositional semantic parsing): the input read
+  bidirectionally -> model_reader prefix_lm option.
+- Constrained decoding and output close to the input order (Shin et al. 2021; Rongali et al. 2022) -> --of_form.
+- Architecture surveys (Hymba 2024 meta tokens + SSM heads, Differential Transformer 2024, MobileLLM deep-thin): gains
+  are in pretraining-scale language modelling; none targets style memorization in a small fine-tuned parser.
