@@ -41,7 +41,14 @@ def main():
     a = ap.parse_args()
     dev = get_device()
     model, vocab = load(a.ckpt, dev)
-    qs = [json.loads(l) for p in a.questions for f in glob.glob(p) for l in gzip.open(f, 'rt')]
+    qs = []
+    for p in a.questions:
+        for f in glob.glob(p):
+            try:
+                for l in gzip.open(f, 'rt'):
+                    qs.append(json.loads(l))
+            except (EOFError, OSError, json.JSONDecodeError):
+                pass   # a part file copied while being written: rows up to the break are kept
     from kinlogic.symgen import real_keys
     import hashlib
     blocked = real_keys()   # never a question worded like an evaluation question
