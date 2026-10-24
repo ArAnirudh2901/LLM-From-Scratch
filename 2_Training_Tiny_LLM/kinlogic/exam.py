@@ -585,3 +585,55 @@ def _which_expression(p, stmts, read, priors):
     return {'answer': ', '.join(ok) or 'none', 'option': ok[0] if len(ok) == 1 else (_labelled(options_, NONE) if not ok else None),
             'status': 'expression',
             'explanation': f"[CHECKED]: options {', '.join(ok) or 'none'} make {names.get(c['y'])} the {c['r']} of {names.get(c['x'])}"}
+
+
+def _sentences(tokens: list[str]) -> list[list[str]]:
+    """Sentences of a prepared question ('.' outside quotes ends one; the question keeps its '?')."""
+    out, cur, quoted = [], [], False
+    for t in tokens:
+        cur.append(t)
+        if t in ('"', '“', '”'):
+            quoted = not quoted
+        if t in ('.', '?') and not quoted:
+            out.append(cur)
+            cur = []
+    return out + ([cur] if cur else [])
+
+
+def with_split(read, min_sentences: int = 3):
+    """Adds one more reading for long questions: every statement sentence read on its own (followed by the question,
+    the shape the reader was trained on), the facts joined with unnamed people renumbered, the question's facts read
+    once. A long puzzle is many short statements; the reader drops and mixes facts far less in a short input."""
+    def run(batch):
+        out = read(batch)
+        for b, toks in enumerate(batch):
+            sents = _sentences(list(toks))
+            if len(sents) < min_sentences or not any(t == '?' for t in sents[-1]):
+                continue
+            q = sents[-1]
+            parts = read([s + q for s in sents[:-1]] + [q])
+            facts, n_new, question = [], 0, None
+            for k, got in enumerate(parts):
+                lf = got if isinstance(got, str) else (got[0] if isinstance(got[0], str) else got[0][0]) if got else ''
+                stmts = [s.split() for s in lf.split(';') if s.strip()]
+                if k == len(parts) - 1:
+                    question = [s for s in stmts if s and s[0] in ('ask', 'who', 'count', 'gender', 'pair', 'prof')]
+                    continue
+                ren = {}
+                for s in stmts:
+                    if not s or s[0] in ('ask', 'who', 'count', 'gender', 'pair', 'prof'):
+                        continue
+                    for i, t in enumerate(s):
+                        if t[0] == '#':
+                            if t not in ren:
+                                n_new += 1
+                                ren[t] = f'#{n_new}'
+                            s[i] = ren[t]
+                    facts.append(' '.join(s))
+            if facts and question:
+                lf = ' ; '.join(list(dict.fromkeys(facts)) + [' '.join(s) for s in question])
+                prev = out[b] if isinstance(out[b], list) else [(out[b], 0.0)]
+                top = max((g[1] for g in prev if not isinstance(g, str)), default=0.0)
+                out[b] = list(prev) + [(lf, top)]
+        return out
+    return run
