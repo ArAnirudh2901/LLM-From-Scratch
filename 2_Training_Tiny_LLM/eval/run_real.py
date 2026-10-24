@@ -74,13 +74,14 @@ def correct(r, res):
     return bool(mv_w and mv_g and len(mv_w) == len(mv_g) and all(a == c and (g is None or h is None or g == h) for (a, g), (c, h) in zip(mv_w, mv_g)))
 
 
-def run(read, rows, read_more=None, threshold=0.6, correct=False):
+def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None):
     from eval.real_clean import broken
     by = collections.defaultdict(lambda: [0, 0])
     sp = collections.defaultdict(lambda: [0, 0])
     misses, oks = [], []
     for r in rows:
-        res = answer_corrected(as_text(r), read, threshold) if correct else answer_adaptive(as_text(r), read, read_more, threshold) if read_more else answer(as_text(r), read)
+        text = as_text(r)
+        res = answer_fn(text) if answer_fn else answer_corrected(text, read, threshold) if fix else answer_adaptive(text, read, read_more, threshold) if read_more else answer(text, read)
         ok = correct(r, res)
         oks.append(ok)
         for k in (split_of(r), f'{split_of(r)} fair' if not broken(r) else None):
@@ -122,7 +123,7 @@ if __name__ == '__main__':
     from kinlogic.codes import _fits
     chk = (lambda lf: _fits(lf) is not None) if a.check else None
     more = (lambda b: [x + y for x, y in zip(generate(model, vocab, b, dev, k=2 * a.k, check=chk), generate(model, vocab, b, dev, k=2 * a.k, sample=True, temperature=1.0))]) if a.adaptive else None
-    score, misses = run(lambda b: generate(model, vocab, b, dev, k=a.k, check=chk), rows, more, a.adaptive or 0.6, correct=a.correct)
+    score, misses = run(lambda b: generate(model, vocab, b, dev, k=a.k, check=chk), rows, more, a.adaptive or 0.6, fix=a.correct)
     print(json.dumps(score, indent=1))
     if a.out:
         json.dump({'score': score, 'misses': misses}, open(a.out, 'w'), indent=1)

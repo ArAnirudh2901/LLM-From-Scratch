@@ -186,21 +186,28 @@ def with_draft(tokens, draft: str, verdict: str):
     return list(tokens) + ['draft', ':'] + draft.split() + ['check', ':', verdict]
 
 
-def answer_corrected(text: str, read, threshold: float = 0.6, priors: dict | None = None) -> dict:
+def answer_corrected(text: str, read, threshold: float = 0.6, priors: dict | None = None, rounds: int = 3) -> dict:
     """Re-read and correct: when no family fits the readings or the winning option holds less than `threshold` of
     the vote, the reader reads again with its draft and the engine's verdict in view (a reader trained on
-    build_corrections.py rows); the second answer is kept when it fits."""
-    first = answer(text, read, priors)
-    status = first.get('status')
-    if status == 'error' or (status not in ('none', 'contradiction') and first.get('confidence', 1.0) >= threshold):
-        return first
-    draft = (first.get('facts') or '').split('  [')[0].strip()
-    if not draft:
-        return first
-    verdict = 'contradiction' if status in ('none', 'contradiction') else 'unsure'
+    build_corrections.py rows), up to `rounds` times, each round from the newest draft. Stops at the first confident
+    answer; else the most confident answer that fits (the first reading when none does)."""
+    fails = ('error', 'none', 'contradiction')
     main = prepare(text)['tokens']
-    second = answer(text, lambda batch: read([with_draft(t, draft, verdict) if t == main else t for t in batch]), priors)
-    return second if second.get('status') not in ('error', 'none', 'contradiction') else first
+    cur = best = answer(text, read, priors)
+    seen = set()
+    for _ in range(rounds):
+        status = cur.get('status')
+        if status == 'error' or (status not in fails and cur.get('confidence', 1.0) >= threshold):
+            return cur
+        draft = (cur.get('facts') or '').split('  [')[0].strip()
+        if not draft or draft in seen:   # nothing to correct, or the reader repeats itself
+            break
+        seen.add(draft)
+        verdict = 'contradiction' if status in fails else 'unsure'
+        cur = answer(text, lambda batch, d=draft, v=verdict: read([with_draft(t, d, v) if t == main else t for t in batch]), priors)
+        if cur.get('status') not in fails and (best.get('status') in fails or cur.get('confidence', 0.0) > best.get('confidence', 0.0)):
+            best = cur
+    return cur if cur.get('status') not in fails and cur.get('confidence', 1.0) >= threshold else best
 
 
 def _answer(text: str, read, priors: dict | None = None) -> dict:

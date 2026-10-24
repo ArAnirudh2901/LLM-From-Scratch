@@ -13,8 +13,8 @@ import gzip
 import json
 import math
 import os
-import re
 import random
+import re
 import time
 
 import torch
@@ -245,6 +245,8 @@ def main():
     ap.add_argument('--n_layer', type=int, default=6)
     ap.add_argument('--n_loop', type=int, default=None, help='looped reader: run the layer stack this many times (shared weights)')
     ap.add_argument('--loop_curriculum', default='', help="loops by share of the budget, e.g. '1:0,2:0.25,3:0.5' (retrofitted recurrence, McLeish et al. 2025)")
+    ap.add_argument('--loop_random', action='store_true', help='looped reader: each step runs a random number of loops up to the curriculum cap, so every depth is practised and the gate can stop anywhere')
+    ap.add_argument('--grad_loops', type=int, default=0, help='looped reader: gradients through the last N loops only (truncated backprop; 0: all)')
     ap.add_argument('--neftune', type=float, default=0.0, help='noise on input embeddings while training (NEFTune; 5 is the paper default)')
     ap.add_argument('--optim', default='adamw', choices=['adamw', 'muon'], help='muon: NorMuon + cautious weight decay for hidden matrices (optim_muon.py; same lr as AdamW); use it for a model pretrained with it')
     ap.add_argument('--qk_norm', action='store_true', help='RMSNorm on queries and keys (new models only: changes a warm-started one)')
@@ -290,6 +292,8 @@ def main():
     print(f'{sum(p.numel() for p in model.parameters()) / 1e6:.1f}M parameters, vocab {len(vocab)}, device {device}', flush=True)
 
     model.neft = a.neftune
+    model.grad_loops = a.grad_loops
+    loop_rng = random.Random(a.seed + 1)
     groups = {}
     nb = len(getattr(model, 'blocks', []))
     for n, p_ in model.named_parameters():   # layer-wise learning-rate decay: lower layers move less
@@ -390,8 +394,8 @@ def main():
         idx, tgt, lm = collate(next(it), pad, device)
         for g in opt.param_groups:
             g['lr'] = lr_at(step) * g.get('scale', 1.0)
-        if curriculum:   # loops in use grow with training (retrofitted recurrence)
-            model.set_loops(max(k for f, k in curriculum if f <= step / a.steps))
+        cap = max((k for f, k in curriculum if f <= step / a.steps), default=getattr(model, 'n_loop', 1))   # grows with training (retrofitted recurrence)
+        model.set_loops(loop_rng.randint(1, cap) if a.loop_random else cap) if getattr(model, 'n_loop', 1) > 1 else None
         with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
             loss_f, loss_lm = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab)
             loss = loss_f + a.lm_weight * loss_lm
@@ -415,6 +419,8 @@ def main():
             save(latest)
         if step % a.eval_every == 0 or step == a.steps:
             judge = ema or model
+            if getattr(judge, 'n_loop', 1) > 1:   # judged at the deepest depth trained so far
+                judge.set_loops(cap)
             r, _ = evaluate(judge, vocab, device, dev)
             score = r['answer']
             line = f"[eval {step}] generated: exact {r['exact']:.3f} answer {r['answer']:.3f}"

@@ -15,6 +15,7 @@ import collections
 import glob
 import gzip
 import json
+import os
 import re
 
 import torch
@@ -48,6 +49,10 @@ def main():
     n0 = len(qs)
     qs = [q for q in qs if hashlib.sha1(' '.join(prepare(as_text(q))['tokens']).encode()).hexdigest() not in blocked]
     stats['evaluation wording (refused)'] = n0 - len(qs)
+    done = set()
+    if os.path.exists(a.out):   # resume: questions already tried are listed in <out>.done
+        done = set(open(a.out + '.done').read().split('\n')) if os.path.exists(a.out + '.done') else set()
+        qs = [q for q in qs if hashlib.sha1(as_text(q).encode()).hexdigest() not in done]
     out = []
     for i in range(0, len(qs), a.bs):
         chunk = qs[i:i + a.bs]
@@ -94,9 +99,12 @@ def main():
             out.append({'kind': 'star-' + q.get('style', 'q'), 'text': as_text(q), 'tokens': p['tokens'], 'lf': lf,
                         'truth': q['options'][q['answer']], 'readings': len(good), 'hit': round(hit, 3)})
             stats['kept'] += 1
+        with gzip.open(a.out, 'at') as f:   # one gzip block per batch: a stopped run keeps its rows
+            f.write(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in out))
+        with open(a.out + '.done', 'a') as f:
+            f.write(''.join(hashlib.sha1(as_text(q).encode()).hexdigest() + '\n' for q in chunk))
+        out = []
         print(f"{min(i + a.bs, len(qs))}/{len(qs)} | {dict(stats)}", flush=True)
-    with gzip.open(a.out, 'wt') as f:
-        f.write(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in out))
     print('done', dict(stats))
 
 

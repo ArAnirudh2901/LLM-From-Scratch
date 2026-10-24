@@ -91,6 +91,7 @@ class Reader(nn.Module):
         self.loop_emb = nn.Parameter(torch.zeros(n_loop, n_embd)) if n_loop > 1 else None   # which pass the shared blocks are on
         self.exit_gate = nn.Linear(n_embd, 1) if n_loop > 1 else None   # lambda_r: probability of stopping after loop r (PonderNet)
         self.loops_now = n_loop   # loops in use (set_loops): fewer while a loop curriculum ramps up, or to decode faster
+        self.grad_loops = 0   # training: only the last grad_loops loops get gradients (0: all); set by train_reader
         self.neft = 0.0   # NEFTune noise on input embeddings while training (Jain et al. 2023); set by train_reader
         self.loop_noise = 0.0   # relative noise added at each later loop's start at test time (reader.generate samples)
         self.ln_f = RMSNorm(n_embd)
@@ -135,13 +136,16 @@ class Reader(nn.Module):
         x = self._embed(idx)
         cos, sin = self.cos[:T], self.sin[:T]
         hs, lams = [], []
+        cut = self.loops_now - self.grad_loops if self.training and self.grad_loops else 0
         for r in range(self.loops_now):
-            if self.loop_emb is not None:
-                x = self._loop_in(x, r)
-            for blk in self.blocks:
-                x, _ = blk(x, cos, sin)
-            h = self.ln_f(x)
-            hs.append(h)
+            # truncated backprop through depth (Huginn; retrofitted recurrence): any depth costs grad_loops loops of memory
+            with torch.set_grad_enabled(torch.is_grad_enabled() and r >= cut):
+                if self.loop_emb is not None:
+                    x = self._loop_in(x, r)
+                for blk in self.blocks:
+                    x, _ = blk(x, cos, sin)
+                h = self.ln_f(x)
+            hs.append(h)   # gate and heads below still learn from early loops
             lams.append(torch.sigmoid(self.exit_gate(h).float())[..., 0] if self.exit_gate is not None else torch.ones(h.shape[:-1], device=h.device))
         return hs, lams
 
