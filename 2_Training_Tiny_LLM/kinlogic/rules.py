@@ -355,6 +355,26 @@ def _part(p: str, ch, depth: int = 0):
     if got or depth > 6:
         return got
     p = re.sub(r'^([@#]\d+) too ', r'\1 ', p)   # "X too has a daughter named Y"
+    m = re.fullmatch(rf"{E} , whose {REL} is {E} ,? (.+)", p)   # "X , whose husband is Y , is the mother of Z"
+    if m and _rel(m.group(2)) and not _rel(m.group(2)).startswith('only'):
+        rest = _part(f'{m.group(1)} {m.group(4)}', ch, depth + 1)
+        if rest:
+            return [f'{m.group(1)} {_rel(m.group(2))} {m.group(3)}'] + rest
+    m = re.fullmatch(rf"(.+ ){E} , whose {REL} is {E}", p)   # "X 's mother is Y , whose husband is Z"
+    if m and _rel(m.group(3)) and not _rel(m.group(3)).startswith('only'):
+        first = _part(f'{m.group(1)}{m.group(2)}', ch, depth + 1)
+        if first:
+            return first + [f'{m.group(2)} {_rel(m.group(3))} {m.group(4)}']
+    m = re.fullmatch(r'((?:[@#]\d+ , )+[@#]\d+)(?: ,)? and ([@#]\d+) are (?:all )?(sisters|brothers|siblings|cousins)', p)   # three or more
+    if m:
+        xs = re.findall(r'[@#]\d+', m.group(1)) + [m.group(2)]
+        r = {'sisters': 'sister', 'brothers': 'brother', 'siblings': 'sibling', 'cousins': 'cousin'}[m.group(3)]
+        return [f'{a} {r} {b}' for a in xs for b in xs if a != b]
+    m = re.fullmatch(r'([@#]\d+) and ([@#]\d+) are (cousins|spouses|a married couple|husband and wife)', p)
+    if m:
+        a, b, w = m.groups()
+        return {'cousins': [f'{a} cousin {b}', f'{b} cousin {a}'], 'spouses': [f'{a} spouse {b}'], 'a married couple': [f'{a} spouse {b}'],
+                'husband and wife': [f'{b} husband {a}', f'{a} wife {b}']}[w]
     m = re.fullmatch(rf'(.+?)(?: ,)? (?:but|however)(?: ,)? (.+)', p)   # "X is the father of Y but Y is not his son"
     if m and not re.search(r' (?:but|however) ', m.group(1)):
         first = _part(m.group(1), ch, depth + 1)
@@ -495,6 +515,12 @@ def read(tokens, why=None) -> str | None:
     if re.search(r'\b(?:means|denotes|implies|indicates|represents)\b', text) or re.search(r'@\d+ [^\w\s\'".,?;:()] @\d+', text):
         return None   # coded questions (definitions, or an expression whose definitions were cut off): kinlogic/codes.py
     text = re.sub(r'\s*\?\s*$', '', text)
+    hon = []   # "Mrs. X" / "Mr X": the title gives the gender
+
+    def _title(m):
+        hon.append(f"{m.group(2)} {'female' if m.group(1) in ('mrs', 'ms', 'miss', 'smt') else 'male'}")
+        return m.group(2)
+    text = re.sub(r'\b(mrs|ms|miss|smt|mr|shri|sri) (?:\. )?([@#]\d+)', _title, text)
     text = re.sub(r"\b(\w+)(?:-| )in(?:-| )law\b", r'\1-in-law', text)
     text = re.sub(r" [‟’′`] s\b", " 's", text)
     text = re.sub(r"\b(does|do|is|has) n ' t\b|\b(does|do|is|has)n ' t\b", lambda m: (m.group(1) or m.group(2)) + ' not', text)
@@ -531,10 +557,10 @@ def read(tokens, why=None) -> str | None:
             return None
         facts += got
     if ask is None and facts and re.fullmatch(r'(?:then(?: ,)? )?which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)', parts[-1].strip()):
-        return ' ; '.join(facts)   # "which of the following statements is true?": the exam layer checks the options
+        return ' ; '.join(facts + hon)   # "which of the following statements is true?": the exam layer checks the options
     if ask is None or not facts:
         return None
     named = set(re.findall(E, ' ; '.join(facts)))
     if any(x not in named for x in re.findall(r'@\d+', ask)):   # asked about someone no sentence mentions: text lost in the scrape
         return None
-    return ' ; '.join(facts + [ask])
+    return ' ; '.join(facts + hon + [ask])
