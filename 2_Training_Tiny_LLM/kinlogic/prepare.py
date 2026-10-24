@@ -99,7 +99,7 @@ REL_WORD = r'(?:son|daughter|brother|sister|father|mother|husband|wife|uncle|aun
 
 TYPOS = [(r'\bneice(s?)\b', r'niece\1'), (r'\bnefew(s?)\b', r'nephew\1'), (r'\bnephw(s?)\b', r'nephew\1'),
          (r'\b(grand)?(?:daugther|doughter|dauther|daughtor)(s?)\b', r'\1daughter\2'), (r'\bgrandaughter(s?)\b', r'granddaughter\1'),
-         (r'\bbrotherinlaw\b', 'brother-in-law'), (r'\bsisterinlaw\b', 'sister-in-law'), (r'\bcousion(s?)\b', r'cousin\1')]
+         (r'\b(father|mother|son|daughter|brother|sister)\s?in\s?law\b', r'\1-in-law'), (r'\bcousion(s?)\b', r'cousin\1')]
 
 
 def normalize(text: str) -> str:
