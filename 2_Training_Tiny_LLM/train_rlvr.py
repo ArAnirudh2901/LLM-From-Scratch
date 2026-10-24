@@ -90,10 +90,10 @@ def main():
     ap.add_argument('--pool', nargs='+', required=True, help='keyed question files (jsonl: question, options, answer)')
     ap.add_argument('--out', required=True)
     ap.add_argument('--steps', type=int, default=1500)
-    ap.add_argument('--questions', type=int, default=12, help='questions per step')
+    ap.add_argument('--questions', type=int, default=24, help='questions per step')
     ap.add_argument('--versions', type=int, default=2, help='altered versions of each question in its group')
     ap.add_argument('--group', type=int, default=4, help='readings sampled per version')
-    ap.add_argument('--p_generated', type=float, default=0.3, help='share of generated questions (gold facts) in each step')
+    ap.add_argument('--p_generated', type=float, default=0.1, help='share of generated questions (gold facts) in each step')
     ap.add_argument('--temperature', type=float, default=1.0)
     ap.add_argument('--lr', type=float, default=2e-6)
     ap.add_argument('--beta', type=float, default=0.02, help='KL anchor to the reference')
@@ -135,17 +135,23 @@ def main():
 
     best, flat, order, pos = real_dev(), 0, [], 0
     hist, win = [], []   # (mean reward, real dev) per evaluation: reward rising while real dev falls = overfitting
+    flat_q = {}   # pool index -> draws in a row whose readings all scored the same
     print(f'[start] REAL dev {best:.3f}', flush=True)
     torch.save({**ck, 'step_rl': 0, 'real_dev': best}, os.path.join(a.out, 'best.pt'))
     t0 = time.time()
     for step in range(1, a.steps + 1):
-        items = []   # (group, tokens, judge) ; judge: ('real', prepared, key) or ('gen', gold lf, people)
+        items, drawn = [], {}   # (group, tokens, judge) ; judge: ('real', prepared, key) or ('gen', gold lf, people)
         for qi in range(a.questions):
             if pool and rng.random() >= a.p_generated:
-                if pos >= len(order):
-                    order, pos = rng.sample(range(len(pool)), len(pool)), 0   # each question once per pass
-                r = pool[order[pos]]
-                pos += 1
+                while True:
+                    if pos >= len(order):
+                        order, pos = rng.sample(range(len(pool)), len(pool)), 0   # each question once per pass
+                    j = order[pos]
+                    pos += 1
+                    if flat_q.get(j, 0) < 2 or rng.random() < 0.15:
+                        break   # questions whose readings all scored the same twice are mostly skipped (no signal)
+                r = pool[j]
+                drawn[qi] = j
                 for _ in range(a.versions):   # a fresh surface every time
                     rv = variant(r, rng, names)
                     p = prepare(as_text(rv))
@@ -171,6 +177,8 @@ def main():
         for qi, g in groups.items():
             rs = [x for _, _, x in g]
             rewards += rs
+            if qi in drawn:
+                flat_q[drawn[qi]] = flat_q.get(drawn[qi], 0) + 1 if max(rs) - min(rs) < 1e-6 else 0
             if max(rs) - min(rs) < 1e-6:
                 continue   # all readings equally good or bad: no signal (DAPO dynamic sampling)
             kept += 1
