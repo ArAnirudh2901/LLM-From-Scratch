@@ -231,6 +231,7 @@ def main():
     ap.add_argument('--cooldown', type=float, default=0.2, help='decay length as a share of the steps so far (min 2000; 20%% matches cosine, Hägele et al. 2024)')
     ap.add_argument('--run', default=None, help='name of this run (stored in its checkpoints and the runs index)')
     ap.add_argument('--batch', type=int, default=64)
+    ap.add_argument('--accum', type=int, default=1, help='split each batch into this many passes (gradient accumulation; looped readers on a T4)')
     ap.add_argument('--lr', type=float, default=4e-4)
     ap.add_argument('--warmup', type=int, default=500)
     ap.add_argument('--weight_decay', type=float, default=0.1)
@@ -398,16 +399,19 @@ def main():
     t0, seen = time.time(), 0
     pad = vocab.stoi['<pad>']
     while step < a.steps:
-        idx, tgt, lm = collate(next(it), pad, device)
+        batch = next(it)
+        parts = [batch[j::a.accum] for j in range(a.accum)] if a.accum > 1 else [batch]   # same batch, less memory per pass
         for g in opt.param_groups:
             g['lr'] = lr_at(step) * g.get('scale', 1.0)
         cap = max((k for f, k in curriculum if f <= step / a.steps), default=getattr(model, 'n_loop', 1))   # grows with training (retrofitted recurrence)
         model.set_loops(loop_rng.randint(1, cap) if a.loop_random else cap) if getattr(model, 'n_loop', 1) > 1 else None
-        with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
-            loss_f, loss_lm = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab)
-            loss = loss_f + a.lm_weight * loss_lm
         opt.zero_grad(set_to_none=True)
-        scaler.scale(loss).backward()
+        for part in parts:
+            idx, tgt, lm = collate(part, pad, device)
+            with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
+                loss_f, loss_lm = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab)
+                loss = (loss_f + a.lm_weight * loss_lm) / len(parts)
+            scaler.scale(loss).backward()
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(opt)
@@ -417,7 +421,7 @@ def main():
                 for pe, p_ in zip(ema.parameters(), model.parameters()):
                     pe.mul_(a.ema).add_(p_.detach(), alpha=1 - a.ema)
         step += 1
-        seen += idx.size(0)
+        seen += len(batch)
         if step % 100 == 0:
             el = time.time() - t0
             print(f'step {step:6d} | facts {loss_f.item():.4f} | words {loss_lm.item():.3f} | lr {lr_at(step):.2e} | '
