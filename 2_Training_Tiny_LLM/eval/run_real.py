@@ -8,6 +8,7 @@ import argparse
 import collections
 import glob
 import json
+import os
 import re
 
 from kinlogic.exam import _relation_option, answer, answer_adaptive, answer_corrected, option_moves
@@ -115,6 +116,7 @@ if __name__ == '__main__':
     ap.add_argument('--check', action='store_true', help='execution-guided beam: readings no family fits do not count toward k')
     ap.add_argument('--loop_noise', type=float, default=0.0, help='looped reader: relative noise at each later loop start (sampled readings)')
     ap.add_argument('--perturb', type=int, default=0, help='also score N altered copies of each question (eval.perturb: shuffled options, renamed people, new code symbols)')
+    ap.add_argument('--reworded', default=None, help='also score kept reworded copies (eval.reword_real) against their originals')
     ap.add_argument('--loops', type=int, default=None, help='looped reader: most loops to run (default: all it was trained with)')
     ap.add_argument('--halt', action='store_true', help='looped reader: stop early when the engine accepts the reading and the exit gate agrees (reader.answer_looped)')
     ap.add_argument('--correct', action='store_true', help='re-read and correct unsure readings (exam.answer_corrected; needs a reader trained on correction rows)')
@@ -141,5 +143,12 @@ if __name__ == '__main__':
         s1, _ = run(read, [v for _, v in pairs], more, a.adaptive or 0.6, fix=a.correct, answer_fn=fn)
         score['perturbed'] = compare(rows, score['ok'], pairs, s1['ok'], split_of, broken)
         print(json.dumps(score['perturbed'], indent=1))
+    if a.reworded and os.path.exists(a.reworded):
+        from eval.reword_real import compare as cmp_rw, pairs_of
+        orig, copies = pairs_of(a.reworded, rows)
+        ok0 = [score['ok'][rows.index(r)] for r in orig]
+        s2, _ = run(read, copies, more, a.adaptive or 0.6, fix=a.correct, answer_fn=fn)
+        score['reworded'] = cmp_rw(ok0, s2['ok'])
+        print(json.dumps(score['reworded'], indent=1))
     if a.out:
         json.dump({'score': score, 'misses': misses}, open(a.out, 'w'), indent=1)
