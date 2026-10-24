@@ -13,7 +13,7 @@ all score the same are dropped (DAPO dynamic sampling). On-policy: one update pe
 (DAPO), a KL anchor (k3) to a reference that is reset to the policy whenever real dev improves (ProRL), and a little
 supervised loss on generated gold facts. The best checkpoint and early stop are decided by REAL dev questions only.
 
-    python train_rlvr.py --init runs/v10-r6a/best.pt --pool data/real_train2/*.jsonl --out runs/v10-r6-rl --amp
+    python train_rlvr.py --init runs/v10-r6a/best.pt --pool data/real_train2/pool.jsonl --out runs/v10-r6-rl --amp
 """
 from __future__ import annotations
 
@@ -47,6 +47,12 @@ def load_pool(patterns, exact_skip=True):
             for line in open(f):
                 r = json.loads(line)
                 if not r.get('answer') or not r.get('options') or r['answer'] not in [l for l, _ in r['options']]:
+                    continue
+                if r.get('key_status', 'confirmed') not in ('confirmed-exact', 'confirmed', 'corrected', 'agreed'):
+                    continue   # only keys checked by build_real_train.py
+                if exact_skip and 'exact' in r:
+                    if not r['exact']:
+                        rows.append(r)
                     continue
                 if exact_skip:
                     p = prepare(as_text(r))
