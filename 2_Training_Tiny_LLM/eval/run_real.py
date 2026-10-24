@@ -77,6 +77,8 @@ def correct(r, res):
 
 def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None):
     from eval.real_clean import broken
+    from eval.verify_keys import OUT as KEYS, qhash
+    keys = json.load(open(KEYS)) if os.path.exists(KEYS) else {}   # checked answer keys (eval.verify_keys)
     by = collections.defaultdict(lambda: [0, 0])
     sp = collections.defaultdict(lambda: [0, 0])
     misses, oks = [], []
@@ -89,6 +91,10 @@ def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None):
             if k:
                 sp[k][0] += ok
                 sp[k][1] += 1
+        v = keys.get(qhash(r)) if not broken(r) else None
+        if v and v['status'] in ('confirmed', 'corrected'):   # wrong keys fixed, ambiguous questions left out
+            sp[f'{split_of(r)} verified'][0] += res.get('option') == v['key']
+            sp[f'{split_of(r)} verified'][1] += 1
         k = by[r['site']]
         k[0] += ok; k[1] += 1
         if not ok:
