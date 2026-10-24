@@ -637,3 +637,41 @@ def with_split(read, min_sentences: int = 3):
                 out[b] = list(prev) + [(lf, top)]
         return out
     return run
+
+
+def _merge_exact(exact, ask, lf):
+    """A model reading with the clauses the rules understood replaced by their exact facts: model facts about a named
+    pair the exact facts cover are dropped, the exact question wins, the rules' unnamed people are renumbered apart."""
+    pairs = {frozenset(e) for e in (re.findall(r'[@#]\d+', f) for f in exact) if len(e) == 2}
+    keep = []
+    for f in lf.split(' ; '):
+        e = re.findall(r'[@#]\d+', f)
+        if f.startswith(('ask ', 'who ')) and ask:
+            continue
+        if len(e) == 2 and all(x[0] == '@' for x in e) and frozenset(e) in pairs:
+            continue
+        keep.append(f)
+    return ' ; '.join(exact + keep + ([ask] if ask else []))
+
+
+def with_exact_clauses(read):
+    """Hybrid readings: where the rules understand some clauses of a question but not all, every model reading also
+    comes merged with the exact facts of those clauses (one more vote each); the model only has to be right where the
+    rules cannot read. +6 of 327 model-read dev questions in an offline test (runs/readings_dev.jsonl)."""
+    from .rules import read_partial
+
+    def run(batch):
+        out = read(batch)
+        for b, toks in enumerate(batch):
+            try:
+                facts, missed, ask = read_partial(list(toks))
+            except Exception:
+                continue
+            if not facts or not missed:
+                continue
+            ren = lambda f: re.sub(r'#(\d+)', lambda m: f'#{50 + int(m.group(1))}', f)
+            facts, ask = [ren(f) for f in facts], (ren(ask) if ask else None)
+            prev = out[b] if isinstance(out[b], list) else [(out[b], 0.0)]
+            out[b] = list(prev) + [(_merge_exact(facts, ask, g if isinstance(g, str) else g[0]), g[1] if not isinstance(g, str) else 0.0) for g in prev]
+        return out
+    return run

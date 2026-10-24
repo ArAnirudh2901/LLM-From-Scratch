@@ -125,6 +125,7 @@ if __name__ == '__main__':
     ap.add_argument('--adaptive', type=float, default=None, help='re-read with beam 2k + 2k samples when the vote share is below this')
     ap.add_argument('--check', action='store_true', help='execution-guided beam: readings no family fits do not count toward k')
     ap.add_argument('--loop_noise', type=float, default=0.0, help='looped reader: relative noise at each later loop start (sampled readings)')
+    ap.add_argument('--hybrid', action='store_true', help='model readings also merged with the exact facts of the clauses the rules understand (exam.with_exact_clauses)')
     ap.add_argument('--by_sentence', action='store_true', help='long questions also read sentence by sentence (exam.with_split), one more vote')
     ap.add_argument('--perturb', type=int, default=0, help='also score N altered copies of each question (eval.perturb: shuffled options, renamed people, new code symbols)')
     ap.add_argument('--reworded', default=None, help='also score kept reworded copies (eval.reword_real) against their originals')
@@ -150,6 +151,10 @@ if __name__ == '__main__':
     if a.by_sentence:
         from kinlogic.exam import with_split
         read = with_split(read)
+    if a.hybrid:
+        from kinlogic.exam import with_exact_clauses
+        read = with_exact_clauses(read)
+        more = with_exact_clauses(more) if more else None
     from reader import answer_looped
     fn = (lambda text: answer_looped(text, model, vocab, dev, k=a.k)) if a.halt else None
     score, misses = run(read, rows, more, a.adaptive or 0.6, fix=a.correct, answer_fn=fn)

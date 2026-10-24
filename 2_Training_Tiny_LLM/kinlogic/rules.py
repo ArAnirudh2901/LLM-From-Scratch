@@ -564,3 +564,54 @@ def read(tokens, why=None) -> str | None:
     if any(x not in named for x in re.findall(r'@\d+', ask)):   # asked about someone no sentence mentions: text lost in the scrape
         return None
     return ' ; '.join(facts + hon + [ask])
+
+
+def read_partial(tokens) -> tuple[list[str], list[str], str | None]:
+    """(facts of the clauses understood, clauses not understood, ask or None): the exact half of a hybrid reading,
+    where the model reads only what the rules cannot."""
+    why = None
+    text = ' '.join(tokens)
+    if re.search(r'\b(?:means|denotes|implies|indicates|represents)\b', text) or re.search(r'@\d+ [^\w\s\'".,?;:()] @\d+', text):
+        return [], [], None   # coded questions: kinlogic/codes.py
+    text = re.sub(r'\s*\?\s*$', '', text)
+    hon = []   # "Mrs. X" / "Mr X": the title gives the gender
+
+    def _title(m):
+        hon.append(f"{m.group(2)} {'female' if m.group(1) in ('mrs', 'ms', 'miss', 'smt') else 'male'}")
+        return m.group(2)
+    text = re.sub(r'\b(mrs|ms|miss|smt|mr|shri|sri) (?:\. )?([@#]\d+)', _title, text)
+    text = re.sub(r"\b(\w+)(?:-| )in(?:-| )law\b", r'\1-in-law', text)
+    text = re.sub(r" [‟’′`] s\b", " 's", text)
+    text = re.sub(r"\b(does|do|is|has) n ' t\b|\b(does|do|is|has)n ' t\b", lambda m: (m.group(1) or m.group(2)) + ' not', text)
+    parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas )|\? ', text) if p.strip()]
+    parts = [p for p in parts if not INSTRUCTION.match(p.strip())]   # "answer the questions based on the information given below"
+    if parts:   # "..., then what is the relation of X with Y" / "how is X related to Y if Z has no siblings"
+        last = parts[-1]
+        m = re.fullmatch(r'(.+?)(?: ,)? then ((?:what|who|how) .+)', last)
+        if m:
+            parts[-1:] = [m.group(1), m.group(2)]
+        m = re.fullmatch(r'((?:what|who|how) .+?)(?: ,)? if (.+)', parts[-1])
+        if m:
+            parts[-1:] = [m.group(2), m.group(1)]
+        m = re.fullmatch(r'(.+?)(?: ,)? if (.+?)(?: ,)? ((?:what|who|how) .+)', parts[-1])
+        if m:
+            parts[-1:] = [m.group(1), m.group(2), m.group(3)]
+    from .speech import _Chain
+    facts, ask, ch, missed = [], None, _Chain(), []
+    for k, p in enumerate(parts):
+        p = re.sub(r'^(?:and|while|whereas) ', '', p.strip())
+        p = re.sub(r'^\( ?[a-z0-9] ?\) ', '', p)
+        p = re.sub(r'^(?:pick|choose|select) the (?:right|correct) (?:choice|option|answer) from the (?:given )?options(?: ,)? (?:if )?', '', p)   # "(a) X is ..." clue labels
+        if k == len(parts) - 1:
+            if re.fullmatch(r'(?:then(?: ,)? )?which (?:of the following|one|among the following)[^?]*\b(?:true|correct|false|incorrect)', p.strip()):
+                break   # "which of the following statements is true?": the exam layer checks the options
+            q = question(p, ch)
+            if q:
+                ask = q
+                continue
+        got = _part(p, ch)
+        if got is None:
+            missed.append(p)
+            continue
+        facts += got
+    return facts + hon, missed, ask
