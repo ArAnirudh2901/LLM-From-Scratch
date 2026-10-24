@@ -4,7 +4,8 @@ pipeline was tuned on (evaluation only, never training text). Each copy
   - renames people consistently: letters to letters unused in the question, first names to same-gender names that no
     generator list has (eval.unseen_set.held_out_names); names whose gender is open and A/I/O/U/V/X keep their spelling,
   - swaps code symbols consistently ("A $ B means ..." -> "A # B means ..."),
-  - sometimes adds a page prefix ("Question 12:") or drops the closing '?'.
+  - sometimes adds a page prefix ("Question 12:"), drops the closing '?', or uses page spellings ('grand father',
+    'daughter in law', 'neice', 'A,B').
 
     python -m eval.perturb --split dev --k 3        # exact readers only (no model): original vs altered
     python -m eval.run_real --ckpt ... --split dev --perturb 3
@@ -22,6 +23,8 @@ NEW_LETTERS = [c for c in 'BCDEFGHJKLMNPQRSTWYZ']
 SYMBOLS = ['$', '#', '%', '&', '*', '+', '÷', '×', '=', '!', '^', '<', '>', '©', '£', '★']
 VERB = re.compile(r'\b(?:means|implies|denotes|represents|indicates|signifies|stands for|is coded as|shows)\b', re.I)
 FIXED = re.compile(r'none of|cannot|can\'t|not (?:be )?(?:possible|determined)|data (?:is )?(?:in)?adequate|all of|both|neither|either', re.I)
+NOISE = [(r'\bgrand(father|mother|son|daughter|parent|child)', r'grand \1'), (r'-in-law\b', ' in law'),
+         (r',\s+(?=[A-Z]\b)', ','), (r'\bbrother(s?)\b', r'brother\1'), (r'\bniece\b', 'neice')]
 NAMES_CACHE = 'data/real_questions/perturb_names.json'
 
 
@@ -117,6 +120,12 @@ def variant(r: dict, rng: random.Random, names: dict) -> dict:
             opts[i][1] = t
         v['answer'] = next(l for l, t in opts if t == key)
     v['options'] = opts
+    for pat, rep in NOISE:   # page spellings: 'grand father', 'daughter in law', 'A,B' (options too: same source)
+        if rng.random() < 0.3:
+            v['question'] = re.sub(pat, rep, v['question'])
+            v['options'] = [[l, re.sub(pat, rep, t)] for l, t in v['options']]
+            if v.get('answer_text'):
+                v['answer_text'] = re.sub(pat, rep, v['answer_text'])
     if rng.random() < 0.3:
         v['question'] = rng.choice(['Question {}: ', 'Q{}. ', '{}. ']).format(rng.randint(1, 60)) + v['question']
     if v['question'].rstrip().endswith('?') and rng.random() < 0.2:

@@ -91,6 +91,11 @@ _BOILER = [re.compile(p, re.I) for p in (
 REL_WORD = r'(?:son|daughter|brother|sister|father|mother|husband|wife|uncle|aunt|nephew|niece|cousin|grand(?:son|daughter|father|mother|child))'
 
 
+TYPOS = [(r'\bneice(s?)\b', r'niece\1'), (r'\bnefew(s?)\b', r'nephew\1'), (r'\bnephw(s?)\b', r'nephew\1'),
+         (r'\b(grand)?(?:daugther|doughter|dauther|daughtor)(s?)\b', r'\1daughter\2'), (r'\bgrandaughter(s?)\b', r'granddaughter\1'),
+         (r'\bbrotherinlaw\b', 'brother-in-law'), (r'\bsisterinlaw\b', 'sister-in-law'), (r'\bcousion(s?)\b', r'cousin\1')]
+
+
 def normalize(text: str) -> str:
     if re.search(r'â€|Ã.', text):   # UTF-8 read as Windows-1252 ("A â€“ B"): undo it
         try:
@@ -110,6 +115,8 @@ def normalize(text: str) -> str:
     text = re.sub(r'\b([A-Z])\.([A-Z]) (?=is |was |has )', r'\1. \2 ', text)   # "grandfather of U.Q is the brother"
     text = re.sub(r"\b(mother|father|brother|sister|son|daughter|wife|husband)s's\b", r"\1's", text)   # "mothers's"
     text = re.sub(r'\baunty\b', 'aunt', text, flags=re.I)
+    for a, b in TYPOS:   # common page misspellings of relation words
+        text = re.sub(a, b, text, flags=re.I)
     if re.search(r'\bmeans?\b', text):   # digit code symbols glued to letters: "P5Q", "F3M5N3K"
         for _ in range(4):
             text = re.sub(r'(?<![A-Za-z0-9])([A-Z])(\d)(?=[A-Z](?![a-z]))', r'\1 \2 ', text)
