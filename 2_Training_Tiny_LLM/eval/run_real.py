@@ -119,6 +119,7 @@ if __name__ == '__main__':
     ap.add_argument('--out', default=None)
     ap.add_argument('--limit', type=int, default=None, help='first N questions only (quick comparisons)')
     ap.add_argument('--split', default=None, help="only 'dev' or 'test' questions")
+    ap.add_argument('--pattern', default='data/real_questions/*.jsonl', help='question files (data/fresh_online/*.jsonl: questions scraped after training)')
     ap.add_argument('--k', type=int, default=8, help='readings per question (beam width; the engine votes)')
     ap.add_argument('--adaptive', type=float, default=None, help='re-read with beam 2k + 2k samples when the vote share is below this')
     ap.add_argument('--check', action='store_true', help='execution-guided beam: readings no family fits do not count toward k')
@@ -135,7 +136,7 @@ if __name__ == '__main__':
     if a.loops and getattr(model, 'n_loop', 1) > 1:
         model.n_loop = a.loops   # answer_looped and generate stop here; beyond the trained depth repeats the last loop
         model.set_loops(model.n_loop)
-    rows = [r for r in load_real() if not a.split or split_of(r) == a.split][:a.limit]
+    rows = [r for r in load_real(a.pattern) if not a.split or split_of(r) == a.split][:a.limit]
     from kinlogic.codes import _fits
     chk = (lambda lf: _fits(lf) is not None) if a.check else None
     more = (lambda b: [x + y for x, y in zip(generate(model, vocab, b, dev, k=2 * a.k, check=chk), generate(model, vocab, b, dev, k=2 * a.k, sample=True, temperature=1.0))]) if a.adaptive else None

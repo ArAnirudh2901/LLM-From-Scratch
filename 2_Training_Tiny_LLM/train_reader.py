@@ -253,6 +253,7 @@ def main():
     ap.add_argument('--n_layer', type=int, default=6)
     ap.add_argument('--n_loop', type=int, default=None, help='looped reader: run the layer stack this many times (shared weights)')
     ap.add_argument('--loop_curriculum', default='', help="loops by share of the budget, e.g. '1:0,2:0.25,3:0.5' (retrofitted recurrence, McLeish et al. 2025)")
+    ap.add_argument('--of_form', action='store_true', help="facts in the text's order where the text says 'y is the REL of x' (facts.align_of)")
     ap.add_argument('--loop_random', action='store_true', help='looped reader: each step runs a random number of loops up to the curriculum cap, so every depth is practised and the gate can stop anywhere')
     ap.add_argument('--grad_loops', type=int, default=0, help='looped reader: gradients through the last N loops only (truncated backprop; 0: all)')
     ap.add_argument('--neftune', type=float, default=0.0, help='noise on input embeddings while training (NEFTune; 5 is the paper default)')
@@ -300,6 +301,9 @@ def main():
     print(f'{sum(p.numel() for p in model.parameters()) / 1e6:.1f}M parameters, vocab {len(vocab)}, device {device}', flush=True)
 
     model.neft = a.neftune
+    if a.of_form:
+        import reader as _reader
+        _reader.OF_FORM = True
     model.grad_loops = a.grad_loops
     loop_rng = random.Random(a.seed + 1)
     groups = {}

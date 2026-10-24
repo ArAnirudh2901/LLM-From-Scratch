@@ -5,6 +5,8 @@
 "x REL y" means y is x's REL. @k is a person (or placeholder) from the text, #k an unnamed person.
 Facts
     x [not] [only] [paternal|maternal] REL y     family or other link
+    y [not] [only] [paternal|maternal] REL of x  the same fact in the text's own order ("y is the REL of x"): the
+                                                 reader copies instead of reversing; parse() turns it round
     x male | x female                             gender the text gives (pronoun, "a man", "Mrs.")
     x no-sibling | no-brother | no-sister | no-child | unmarried | married
     x opposite y | x same y                       genders differ / match
@@ -38,7 +40,7 @@ ROLES = ['fathers', 'mothers', 'brothers', 'sisters']
 PROFS = ['doctor', 'lawyer', 'engineer', 'teacher', 'professor', 'architect', 'accountant', 'salesman', 'manager', 'clerk',
          'pilot', 'nurse', 'businessman', 'contractor', 'dentist', 'banker', 'singer', 'dancer', 'housewife', 'farmer', 'jeweller', 'student']
 QUESTIONS = ['ask', 'who', 'count', 'gender', 'pair']
-KEYWORDS = [';', *QUESTIONS, *PUZZLE, *GROUPS, *ROLES, 'gen', 'prof', *PROFS, 'not', 'only', 'has', 'male', 'female', 'opposite', 'same',
+KEYWORDS = [';', 'of', *QUESTIONS, *PUZZLE, *GROUPS, *ROLES, 'gen', 'prof', *PROFS, 'not', 'only', 'has', 'male', 'female', 'opposite', 'same',
             'people', 'couple', *SIDES, *ATTRS]
 RELS = [*KIN, *sorted(NONKIN)]
 NUMBERS = [str(n) for n in range(0, 21)]
@@ -124,15 +126,44 @@ def parse_stmt(tk: list[str]) -> dict | None:
         return {'t': 'gen', 'x': a, 'n': int(tk[2])} if tk[2].isdigit() and int(tk[2]) >= 1 else None
     if n == 3 and b in ('opposite', 'same'):
         return {'t': b, 'x': a, 'y': tk[2]} if is_ent(tk[2]) and tk[2] != a else None
-    y, r = tk[-1], tk[-2]
+    flip = n >= 4 and tk[-2] == 'of'   # "y REL of x": y is x's REL
+    y, r = tk[-1], tk[-3 if flip else -2]
     if not is_ent(y) or y == a or not _is_rel(r):
         return None
-    m = _mods(tk[1:-2])
+    m = _mods(tk[1:-3 if flip else -2])
     if not m or not _side_ok(r, m['side']) or (m['only'] and r not in ONLY):
         return None
     if r in NONKIN and (m['only'] or m['side']):
         return None
-    return {'t': 'rel', 'x': a, 'r': r, 'y': y, **m}
+    return {'t': 'rel', 'x': y, 'r': r, 'y': a, **m} if flip else {'t': 'rel', 'x': a, 'r': r, 'y': y, **m}
+
+
+_LINK = {'is', 'was', 'the', 'a', 'an', 'his', 'her', 'their', 'also'}
+
+
+def align_of(tokens: list[str], lf: str) -> str:
+    """Training targets in the text's order: a fact "x REL y" (y is x's REL) becomes "y REL of x" when the text says
+    "y is the REL of ...". Same meaning (parse() reads both); the reader then copies the sentence order instead of
+    reversing it, the commonest reading error on real questions."""
+    out = []
+    for st in lf.split(';'):
+        tk = st.split()
+        if len(tk) >= 3 and is_ent(tk[0]) and is_ent(tk[-1]) and _is_rel(tk[-2]) and tk[0] != tk[-1] and tk[-1][0] == '@':
+            x, r, y, mods = tk[0], tk[-2], tk[-1], tk[1:-2]
+            for i, t in enumerate(tokens):
+                if t != y:
+                    continue
+                j = i + 1
+                while j < len(tokens) and j - i <= 5 and (tokens[j] in _LINK or tokens[j] in mods):
+                    j += 1
+                k = j + 2 if j + 1 < len(tokens) and tokens[j] == x and tokens[j + 1] == "'s" else None   # "y is x's REL"
+                while k is not None and k < len(tokens) and tokens[k] in mods:
+                    k += 1
+                if (j + 1 < len(tokens) and tokens[j] == r and tokens[j + 1] == 'of') or (k is not None and k < len(tokens) and tokens[k] == r):
+                    tk = [y, *mods, r, 'of', x]
+                    break
+        out.append(' '.join(tk))
+    return ' ; '.join(out)
 
 
 QUESTION_TYPES = {'ask', 'who', 'count', 'gender?', 'pair', 'prof?'}
@@ -304,5 +335,7 @@ def _allowed(written: list[str], ents: list[str]) -> list[str]:
     if last in SIDES:
         return _SIDED
     if last in KIN or last in NONKIN:
+        return [*others(a), 'of']
+    if last == 'of':
         return others(a)
     return [';']

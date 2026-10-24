@@ -88,8 +88,14 @@ def permute_entities(tokens, lf, rng: random.Random):
     return [m(t) for t in tokens], ' '.join(m(t) for t in lf.split())
 
 
+OF_FORM = False   # train_reader --of_form: targets in the text's order (facts.align_of)
+
+
 def encode_example(vocab: Vocab, tokens, lf, block: int, rng: random.Random | None = None, unk_p: float = 0.0):
     """ids = <bos> question <c> facts <eos>; returns (ids, index of <c>) or None when too long."""
+    if OF_FORM:
+        from kinlogic.facts import align_of
+        lf = align_of(list(tokens), lf)
     if rng is not None:
         tokens, lf = permute_entities(tokens, lf, rng)
         if unk_p:
