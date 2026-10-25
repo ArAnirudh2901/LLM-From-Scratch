@@ -130,6 +130,7 @@ if __name__ == '__main__':
     ap.add_argument('--by_sentence', action='store_true', help='long questions also read sentence by sentence (exam.with_split), one more vote')
     ap.add_argument('--para', type=int, default=0, help='vote over N extra copies of each question (renamed people, new code symbols, options in place)')
     ap.add_argument('--split_search', action='store_true', help='long questions: sentence-level beam search checked by the engine (exam.with_split_search)')
+    ap.add_argument('--verifier', default=None, help='weights of the learned verifier (train_verifier.py); weights the vote')
     ap.add_argument('--cover', action='store_true', help='readings that leave a named person out weigh less in the vote (KIN_COVER)')
     ap.add_argument('--perturb', type=int, default=0, help='also score N altered copies of each question (eval.perturb: shuffled options, renamed people, new code symbols)')
     ap.add_argument('--reworded', default=None, help='also score kept reworded copies (eval.reword_real) against their originals')
@@ -167,6 +168,8 @@ if __name__ == '__main__':
         more = with_exact_clauses(more) if more else None
     from reader import answer_looped
     fn = (lambda text: answer_looped(text, model, vocab, dev, k=a.k)) if a.halt else None
+    if a.verifier:
+        os.environ['KIN_VERIFIER'] = a.verifier
     if a.cover:
         import kinlogic.exam as E
         E.COVER = True

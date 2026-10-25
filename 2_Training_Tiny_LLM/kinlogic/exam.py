@@ -8,6 +8,7 @@ sufficiency, and coded "which expression shows..." questions (each option is rea
 """
 from __future__ import annotations
 
+import collections
 import os
 import re
 
@@ -212,11 +213,18 @@ def answer_corrected(text: str, read, threshold: float = 0.6, priors: dict | Non
     return cur if cur.get('status') not in fails and cur.get('confidence', 1.0) >= threshold else best
 
 
-def _answer(text: str, read, priors: dict | None = None) -> dict:
-    """read may return one reading per question or several, best first, optionally with scores (mean log-probability
-    per token). Every reading is solved; readings that fail (contradiction, no question) drop out; the rest vote for
-    their option, weighted by the reader's confidence. confidence: the winning option's share of the votes."""
-    import math
+_VERIFIER = []
+
+
+def _verifier():
+    if not _VERIFIER:
+        from .verifier import Verifier
+        _VERIFIER.append(Verifier.load(os.environ.get('KIN_VERIFIER')))
+    return _VERIFIER[0]
+
+
+def candidates(text: str, read, priors: dict | None = None):
+    """(prepared question, [(engine result, reader score)]) for every reading."""
     from .codes import with_codes
     p = prepare(text)
     read = with_codes(read, p)   # coded questions are read exactly; the model reads the rest
@@ -230,11 +238,26 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
             res = {'answer': 'error', 'option': None, 'status': 'error', 'explanation': f'{type(e).__name__}: {e}', 'facts': lf}
         res['reading'] = k
         results.append((res, score))
+    return p, results
+
+
+def _answer(text: str, read, priors: dict | None = None) -> dict:
+    """read may return one reading per question or several, best first, optionally with scores (mean log-probability
+    per token). Every reading is solved; readings that fail (contradiction, no question) drop out; the rest vote for
+    their option, weighted by the reader's confidence. confidence: the winning option's share of the votes."""
+    import math
+    p, results = candidates(text, read, priors)
     good = [(r, sc) for r, sc in results if r['status'] not in ('error', 'contradiction', 'none')]
     if not good:
         return {**results[0][0], 'confidence': 0.0}
     top = max(sc for _, sc in good)
     weights = [math.exp(8 * (sc - top)) for _, sc in good]   # sharper than the raw per-token average
+    v = _verifier()
+    if v:   # learned verifier (kinlogic/verifier.py): probability each reading is right
+        from .verifier import features
+        key = lambda r: r['option'] if p['options'] else r['answer']
+        cnt = collections.Counter(key(r) for r, _ in good)
+        weights = [v.prob(features(p, r, sc, top, cnt[key(r)] / len(good), i, len(good))) for i, (r, sc) in enumerate(good)]
     if COVER:   # a reading that leaves a named person of the question out has likely dropped a sentence
         people = {t for t in p['tokens'] if re.fullmatch(r'@\d+', t)}
         weights = [wt * 0.35 ** len(people - set(re.findall(r'@\d+', r.get('facts') or ''))) for (r, _), wt in zip(good, weights)]
