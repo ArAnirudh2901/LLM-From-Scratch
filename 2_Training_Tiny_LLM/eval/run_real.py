@@ -128,6 +128,8 @@ if __name__ == '__main__':
     ap.add_argument('--simplify', action='store_true', help='questions with relative clauses also read with the clauses split into plain sentences (exam.simplify)')
     ap.add_argument('--hybrid', action='store_true', help='model readings also merged with the exact facts of the clauses the rules understand (exam.with_exact_clauses)')
     ap.add_argument('--by_sentence', action='store_true', help='long questions also read sentence by sentence (exam.with_split), one more vote')
+    ap.add_argument('--para', type=int, default=0, help='vote over N extra copies of each question (renamed people, new code symbols, options in place)')
+    ap.add_argument('--cover', action='store_true', help='readings that leave a named person out weigh less in the vote (KIN_COVER)')
     ap.add_argument('--perturb', type=int, default=0, help='also score N altered copies of each question (eval.perturb: shuffled options, renamed people, new code symbols)')
     ap.add_argument('--reworded', default=None, help='also score kept reworded copies (eval.reword_real) against their originals')
     ap.add_argument('--loops', type=int, default=None, help='looped reader: most loops to run (default: all it was trained with)')
@@ -161,6 +163,32 @@ if __name__ == '__main__':
         more = with_exact_clauses(more) if more else None
     from reader import answer_looped
     fn = (lambda text: answer_looped(text, model, vocab, dev, k=a.k)) if a.halt else None
+    if a.cover:
+        import kinlogic.exam as E
+        E.COVER = True
+    if a.para:   # self-consistency over surface forms: the same question with other names and code symbols
+        import random
+        import zlib
+        from eval.perturb import held_out, variant
+        names, by_text = held_out(), {as_text(r): r for r in rows}
+        base = fn or (lambda text: answer_adaptive(text, read, more, a.adaptive or 0.6) if more else answer(text, read))
+
+        def fn(text):
+            outs, r = [base(text)], by_text.get(text)
+            rng = random.Random(zlib.crc32(text.encode()))
+            for _ in range(a.para if r else 0):
+                try:
+                    outs.append(base(as_text(variant(r, rng, names, shuffle=False))))
+                except Exception:
+                    pass
+            votes = collections.Counter()
+            for o in outs:
+                if o.get('option'):
+                    votes[o['option']] += 1.0 + o.get('confidence', 0.0)
+            if not votes:
+                return outs[0]
+            best = votes.most_common(1)[0][0]
+            return next(o for o in outs if o.get('option') == best)
     score, misses = run(read, rows, more, a.adaptive or 0.6, fix=a.correct, answer_fn=fn)
     print(json.dumps({k: v for k, v in score.items() if k != 'ok'}, indent=1))
     if a.perturb:

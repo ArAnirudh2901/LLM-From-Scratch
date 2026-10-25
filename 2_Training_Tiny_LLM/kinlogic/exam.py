@@ -160,6 +160,7 @@ NEAREST = os.environ.get('KIN_NEAREST', '1') == '1'   # still nothing: the close
 INVERSE = os.environ.get('KIN_INVERSE', '1') == '1'   # no option names the answer but one names the reverse relation: take it
 RELAX = os.environ.get('KIN_RELAX', '1') == '1'   # a self-contradictory question still gets the answer its keys expect
 DESC_UNNAMED = os.environ.get('KIN_DESC_UNNAMED', '1') == '1'   # described people may turn out to be someone named
+COVER = os.environ.get('KIN_COVER', '0') == '1'   # vote weight: readings must use every named person
 SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for every spoken description (dev +1.1, locked test -0.4 with r3); off: exact speech readings only
 
 
@@ -234,6 +235,9 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
         return {**results[0][0], 'confidence': 0.0}
     top = max(sc for _, sc in good)
     weights = [math.exp(8 * (sc - top)) for _, sc in good]   # sharper than the raw per-token average
+    if COVER:   # a reading that leaves a named person of the question out has likely dropped a sentence
+        people = {t for t in p['tokens'] if re.fullmatch(r'@\d+', t)}
+        weights = [wt * 0.35 ** len(people - set(re.findall(r'@\d+', r.get('facts') or ''))) for (r, _), wt in zip(good, weights)]
     votes = {}
     for (r, _), wt in zip(good, weights):
         key = r['option'] if p['options'] else r['answer']

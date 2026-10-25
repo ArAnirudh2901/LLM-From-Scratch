@@ -73,7 +73,7 @@ def _texts(r) -> list[str]:
     return [r['question']] + [t for _, t in r['options']] + [r.get('answer_text') or '']
 
 
-def variant(r: dict, rng: random.Random, names: dict) -> dict:
+def variant(r: dict, rng: random.Random, names: dict, shuffle: bool = True) -> dict:
     from kinlogic.names import name_gender
     from kinlogic.prepare import prepare
     from eval.run_real import as_text
@@ -111,7 +111,7 @@ def variant(r: dict, rng: random.Random, names: dict) -> dict:
     if r.get('answer_text'):
         v['answer_text'] = alter(r['answer_text'])
     opts = [[l, alter(t)] for l, t in r['options']]
-    if opts and r.get('answer') in [l for l, _ in opts] and not any(re.search(r'\([a-e]\)|\b[a-e] and [a-e]\b', t) for _, t in opts):
+    if shuffle and opts and r.get('answer') in [l for l, _ in opts] and not any(re.search(r'\([a-e]\)|\b[a-e] and [a-e]\b', t) for _, t in opts):
         move = [i for i, (_, t) in enumerate(opts) if not FIXED.search(t)]
         texts = [opts[i][1] for i in move]
         key = next(t for l, t in opts if l == r['answer'])
