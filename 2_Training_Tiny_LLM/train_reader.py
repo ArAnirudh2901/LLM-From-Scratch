@@ -88,6 +88,12 @@ class PoolStream(IterableDataset):
                 ex = rng.choice(self.pool['kinds'][rng.choices(kinds, weights)[0]])
             n += 1
             tokens, lf = (ex[0].split(' '), ex[1]) if isinstance(ex, tuple) else (ex['tokens'], ex['lf'])
+            if self.pool.get('style_p') and u >= self.pc + self.pa + self.pool.get('p_reworded', 0) and rng.random() < self.pool['style_p']:
+                from boost_phrases import boost, restyle   # exam-style surface on the fly (phrase_audit.py); facts unchanged
+                got = restyle(list(tokens), lf, rng, married=False)
+                tokens = got[0] if got else tokens
+                if rng.random() < 0.4:
+                    tokens = boost(list(tokens), rng) or tokens
             enc = encode_example(self.vocab, tokens, lf, self.block, rng, self.unk_p)
             if enc:
                 yield enc
@@ -270,6 +276,7 @@ def main():
     ap.add_argument('--ramp_steps', type=int, default=20000, help='steps by which every depth (up to 12) is in the mix')
     ap.add_argument('--reworded', default='data/reworded.jsonl.gz', help='extra verified rows, comma-separated files: rewrites (kinlogic/reword.py), STaR rows (star.py), minimal pairs')
     ap.add_argument('--p_reworded', type=float, default=0.15)
+    ap.add_argument('--style_p', type=float, default=0.0, help='share of pool rows rewritten on the fly toward exam phrasing (boost_phrases.restyle/boost; facts unchanged)')
     ap.add_argument('--reworded_dev', default='data/reworded_dev.jsonl.gz', help='held-out rewrites (kinlogic/reword_merge.py): scored each evaluation')
     ap.add_argument('--w_reworded', type=float, default=0.4, help="weight of the held-out rewrites in the pick score (closest to real phrasing)")
     a = ap.parse_args()
@@ -366,6 +373,8 @@ def main():
     if pool and extra:
         pool['reworded'], pool['p_reworded'] = [r for f, k in extra for r in load_jsonl(f) * k], a.p_reworded
         print(f"reworded: {len(pool['reworded'])} verified rewrites at {a.p_reworded:.0%}", flush=True)
+    if pool is not None:
+        pool['style_p'] = a.style_p
     if pool:
         import hashlib
         sig = hashlib.sha1(''.join(r['lf'] for r in pool['dev'][:600] + rw_dev).encode()).hexdigest()[:12]

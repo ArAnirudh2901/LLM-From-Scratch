@@ -139,3 +139,121 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# --- restyling toward the forms real exams use (phrase_audit.py): every rewrite keeps the facts, or changes them only
+# where the engine's answer provably stays the same (checked per row) ---
+_P = r'(@\d+)'
+_R = r'((?:only )?(?:paternal |maternal )?(?:elder |younger )?[a-z][a-z-]*)'
+QFORMS = [('how is {a} related to {b} ?', 0.62), ('who is {a} to {b} ?', 0.14), ('what is {a} to {b} ?', 0.1),
+          ('how is {a} related with {b} ?', 0.08), ('what is the relation of {a} with {b} ?', 0.06)]
+QIN = re.compile(rf"(?:how is {_P} (?:related|connected) (?:to|with) {_P}|what relation does {_P} bear to {_P}|{_P} is related to {_P} as|"
+                 rf"what is {_P} to {_P}|who is {_P} to {_P}|what is the relation(?:ship)? of {_P} (?:with|to) {_P}) \?")
+
+
+def _sent_rewrite(s, rng):
+    """One statement sentence (no final '.') in a more exam-like form; same fact."""
+    m = re.fullmatch(rf"{_P} 's {_R} is {_P}", s) or re.fullmatch(rf"the {_R} of {_P} is {_P}", s)
+    if m:   # "X 's R is Y" / "the R of X is Y" -> "Y is the R of X"
+        x, r, y = (m.group(1), m.group(2), m.group(3)) if s.startswith('@') else (m.group(2), m.group(1), m.group(3))
+        return f'{y} is the {r} of {x}' if rng.random() < 0.8 else f"{y} is {x} 's {r}"
+    m = re.fullmatch(rf'{_P} has (?:a|an) {_R} (?:named|called) {_P}', s) or re.fullmatch(rf'{_P} has (?:a|an) {_R} , {_P}', s)
+    if m and not m.group(2).startswith('only'):   # "X has a R named Y" -> "Y is the R of X"
+        return f'{m.group(3)} is the {m.group(2)} of {m.group(1)}'
+    return None
+
+
+def _married(s, lf, rng):
+    """'Y is the wife/husband of X' (or 'X 's wife is Y') -> 'X is married to Y', the fact becoming 'X spouse Y'."""
+    m = re.fullmatch(rf'{_P} is the (wife|husband) of {_P}', s) or re.fullmatch(rf"{_P} 's (wife|husband) is {_P}", s)
+    if not m:
+        return None
+    if s.endswith(m.group(3)) and "'s" in s:
+        x, rel, y = m.group(1), m.group(2), m.group(3)
+    else:
+        y, rel, x = m.group(1), m.group(2), m.group(3)
+    old = f'{x} {rel} {y}'
+    if old not in lf.split(' ; '):
+        return None
+    new_lf = ' ; '.join(f'{x} spouse {y}' if f == old else f for f in lf.split(' ; '))
+    return (f'{x} is married to {y}' if rng.random() < 0.5 else f'{y} is married to {x}'), new_lf
+
+
+def restyle(tokens, lf, rng, married=True):
+    """(tokens, lf) moved toward exam style: sentence forms, 'married to', coordination, an 'if ...' conditional,
+    exam question wording. None when nothing changed."""
+    sents, tail = sentences(tokens)
+    body = [' '.join(s[:-1]) for s in sents]
+    changed = False
+    for i, s in enumerate(body):
+        if rng.random() < 0.85:
+            new = _sent_rewrite(s, rng)
+            if new:
+                body[i], changed = new, True
+        if married and rng.random() < 0.5:
+            got = _married(body[i], lf, rng)
+            if got:
+                body[i], lf = got
+                changed = True
+    out, i = [], 0
+    while i < len(body):   # "X is the R of Y . X is the S of Z" -> "X is the R of Y and the S of Z"
+        if i + 1 < len(body) and rng.random() < 0.5:
+            m1 = re.fullmatch(rf'{_P} is (the |a |an )?{_R} of {_P}', body[i])
+            m2 = re.fullmatch(rf'{_P} is (the |a |an )?{_R} of {_P}', body[i + 1])
+            if m1 and m2 and m1.group(1) == m2.group(1):
+                out.append(f'{body[i]} and {(m2.group(2) or "").strip() + " " if m2.group(2) else ""}{m2.group(3)} of {m2.group(4)}'.replace('  ', ' '))
+                i, changed = i + 2, True
+                continue
+        out.append(body[i])
+        i += 1
+    q = ' '.join(tail)
+    m = QIN.search(q)
+    if m:
+        g = [x for x in m.groups() if x]
+        a, b = g[0], g[1]
+        if q.startswith('what relation does') or ' is related to ' in m.group(0):
+            pass
+        r_ = rng.random()
+        acc = 0.0
+        for form, w in QFORMS:
+            acc += w
+            if r_ < acc:
+                new_q = q.replace(m.group(0), form.format(a=a, b=b))
+                if new_q != q:
+                    q, changed = new_q, True
+                break
+    if len(out) >= 2 and q.startswith(('how is', 'who is', 'what is')) and rng.random() < 0.25:   # "if A , B and C , how is ...?"
+        text = 'if ' + ' , '.join(out[:-1]) + ' and ' + out[-1] + ' , ' + q
+        changed = True
+    else:
+        text = ' '.join(s + ' .' for s in out) + (' ' + q if q else '')
+    return (text.split(), lf) if changed else None
+
+
+def restyle_rows(rows, rng, n):
+    from train_reader import answers
+    st, out = collections.Counter(), []
+    for r in rows[:n]:
+        toks, lf = r.get('tokens'), r.get('lf')
+        if not isinstance(toks, list) or not lf:
+            continue
+        got = restyle(toks, lf, rng)
+        if not got:
+            st['unchanged'] += 1
+            continue
+        new, new_lf = got
+        people = sorted({t for t in toks if t[0] == '@'})
+        if new_lf != lf:
+            try:
+                same = answers(new_lf, people) == answers(lf, people)
+            except Exception:
+                same = False
+            if not same:
+                st['answer would change (dropped)'] += 1
+                continue
+        if sorted(t for t in new if t[0] == '@') != sorted(t for t in toks if t[0] == '@') and set(new) - set(toks) - {'if', 'and', ',', 'married', 'to', 'the', 'of', 'is', 'who', 'what', 'how', 'related', 'with', 'relation', '?', "'s"}:
+            st['odd tokens (dropped)'] += 1
+            continue
+        st['restyled'] += 1
+        out.append({**r, 'kind': 'style-' + str(r.get('kind', 'q')), 'tokens': new, 'lf': new_lf, 'text': ' '.join(new)})
+    return out, st

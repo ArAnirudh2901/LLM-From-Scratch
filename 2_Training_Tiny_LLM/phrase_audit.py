@@ -50,6 +50,20 @@ TYPES = {   # on prepared token text (people are @k)
     'grand-/great-': r'\b(?:grand|great)',
     'cousin / nephew / niece': r'\b(?:cousin|nephew|niece)\b',
     'brother-/sister- (siblings)': r'\b(?:siblings?|brothers|sisters)\b',
+    'if-conditional (if X is ... , how)': r'\bif @\d+ (?:is|was|has)\b',
+    'coordination (R of Y and the S of Z)': rf'of {E} and (?:the |a |an )?(?:only )?[a-z-]+ of {E}',
+    'X has a R named / called Y': rf'{E} has (?:a|an|one|two|three) [a-z-]+ (?:named|called) {E}',
+    'X has a R , Y': rf'{E} has (?:a|an|one) [a-z-]+ , {E}',
+    "Y is X 's R": rf"{E} is {E} 's [a-z-]+",
+    'the R of X is Y': rf'\bthe (?:only )?[a-z-]+ of {E} is {E}',
+    "who is X 's R (clause + possessive)": rf", who is {E} 's",
+    'and his/her R (and X)': r'\band (?:his|her|their) [a-z-]+\b',
+    'married to': r'\bmarried to\b',
+    'Q: how is X related to Y': rf'how is {E} related (?:to|with) {E}',
+    'Q: what is X to Y / relation of': rf'\bwhat is (?:{E} to|the relation(?:ship)? (?:of|between))',
+    'Q: X is related to Y as': rf'{E} is related to {E} as',
+    'Q: who is X to Y / who is the R of': rf'\bwho is (?:{E} to|the [a-z-]+ of)',
+    'Q: how is X connected / what relation does': r'\b(?:connected to|what relation does|in what way|how are .* related)',
 }
 PAT = {k: re.compile(v) for k, v in TYPES.items()}
 
