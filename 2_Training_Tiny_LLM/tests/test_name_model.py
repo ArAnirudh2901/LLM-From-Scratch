@@ -31,6 +31,7 @@ def test_name_priors_use_the_model_when_present(tmp_path, monkeypatch):
     torch.save({'model': m.state_dict(), 'config': m.cfg, 't_male': 0.0, 't_female': 1.0}, tmp_path / 'nm.pt')
     monkeypatch.setattr(kn, 'MODEL_PATH', str(tmp_path / 'nm.pt'))
     monkeypatch.setattr(kn, '_MODEL', None)
+    monkeypatch.setattr(kn, '_TABLE', None)   # an earlier test may have loaded the shipped table
     ents = [{'id': '@0', 'text': 'Rahul', 'kind': 'name'}, {'id': '@1', 'text': 'Kiran', 'kind': 'name'}]
     assert kn.name_priors(ents) == {}   # thresholds 0/1: an untrained model decides nothing; Kiran is unisex anyway
     monkeypatch.setattr(kn, 'MODEL_PATH', str(tmp_path / 'missing.pt'))

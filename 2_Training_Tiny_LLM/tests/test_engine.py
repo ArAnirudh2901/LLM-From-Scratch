@@ -274,7 +274,7 @@ def test_narrator_without_names():
 def test_no_relation():
     from kinlogic.exam import answer
     one = lambda f: (lambda b: [[(f, 0.0)]] * len(b))
-    q = 'Ravi is the son of Kamal. Mithun is the brother of Sunil. How is Mithun related to Ravi? (a) Uncle (b) Son (c) No relation (d) Brother'
+    q = 'Q is the son of P. R is the brother of S. How is R related to Q? (a) Uncle (b) Son (c) No relation (d) Brother'
     assert answer(q, one('@1 son @0 ; @2 brother @3 ; ask @1 @2'))['option'] == 'c'
-    r = answer('Rahul is a stranger to Amit. How is Amit related to Rahul? (a) Brother (b) Stranger (c) Cousin', one('@1 stranger @0 ; ask @0 @1'))
+    r = answer('P is a stranger to Q. How is Q related to P? (a) Brother (b) Stranger (c) Cousin', one('@1 stranger @0 ; ask @0 @1'))
     assert r['option'] == 'b' and r['status'] == 'unrelated'
