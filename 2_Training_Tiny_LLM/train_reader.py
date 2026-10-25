@@ -99,7 +99,7 @@ class PoolStream(IterableDataset):
                 yield enc
 
 
-def load_pool(root):
+def load_pool(root, guard=None):
     """{'kinds': {kind: rows}, 'deep': {depth: rows}, 'dev': rows, 'test': rows} from build_dataset.py's files."""
     import glob
     import zlib
@@ -107,10 +107,11 @@ def load_pool(root):
     small = lambda r: (' '.join(r['tokens']), r['lf'])   # training rows: two strings each (1.4M rows fit in RAM)
     pool = {'kinds': {}, 'deep': {}, 'dev': [], 'test': []}
     for f in sorted(glob.glob(f'{root}/kinds/*.jsonl.gz')):
-        pool['kinds'][os.path.basename(f).split('.')[0]] = [small(r) for r in load_jsonl(f)]
+        pool['kinds'][os.path.basename(f).split('.')[0]] = [small(r) for r in load_jsonl(f) if not (guard and guard.exact_only(r['tokens']))]
     for f in sorted(glob.glob(f'{root}/deep/*/d*.jsonl.gz')):
         for r in load_jsonl(f):
-            pool['deep'].setdefault(r['depth'], []).append(small(r))
+            if not (guard and guard.exact_only(r['tokens'])):
+                pool['deep'].setdefault(r['depth'], []).append(small(r))
     for r in load_jsonl(f'{root}/test/deep.jsonl.gz') if os.path.exists(f'{root}/test/deep.jsonl.gz') else []:
         pool['dev' if zlib.crc32(r['text'].encode()) % 2 == 0 else 'test'].append(keep(r))
     for k in ('dev', 'test'):   # mixed formats and depths in any prefix (the file is ordered by format, then depth)
@@ -358,7 +359,9 @@ def main():
     cval = load_jsonl('data/clutrr_facts/validation.jsonl.gz', 400) if os.path.exists('data/clutrr_facts/validation.jsonl.gz') else []
     from eval.authored_set import examples as authored_examples
     authored = authored_examples(('train',)) if a.p_authored > 0 else []
-    pool = load_pool(a.pool) if a.pool and os.path.isdir(a.pool) else None
+    from eval.leak import Guard
+    guard = Guard() if a.pool and os.path.isdir(a.pool) else None   # no evaluation question reaches training
+    pool = load_pool(a.pool, guard) if guard else None
     rw_dev = load_jsonl(a.reworded_dev) if a.reworded_dev and os.path.exists(a.reworded_dev) else []
     real_dev = []
     if a.real_dev:
@@ -371,7 +374,7 @@ def main():
     extra = [(f.split('*')[0], int(f.split('*')[1]) if '*' in f else 1) for f in (a.reworded or '').split(',') if f]
     extra = [(f, k) for f, k in extra if os.path.exists(f)]   # rewrites, STaR rows, minimal pairs; 'file*3' repeats a file
     if pool and extra:
-        pool['reworded'], pool['p_reworded'] = [r for f, k in extra for r in load_jsonl(f) * k], a.p_reworded
+        pool['reworded'], pool['p_reworded'] = guard.clean([r for f, k in extra for r in load_jsonl(f) * k], 'extra files'), a.p_reworded
         print(f"reworded: {len(pool['reworded'])} verified rewrites at {a.p_reworded:.0%}", flush=True)
     if pool is not None:
         pool['style_p'] = a.style_p
