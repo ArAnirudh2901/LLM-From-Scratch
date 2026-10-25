@@ -218,10 +218,44 @@ def close_question(text: str) -> str:
     return t.rstrip('. ') + ' ?'
 
 
+
+INFORMAL_KIN = [(r'\b(?:dad|daddy|papa)\b', 'father'), (r'\b(?:mom|mommy|mum|mummy)\b', 'mother'), (r'\bbro\b', 'brother'),
+                (r'\bsis\b', 'sister'), (r'\b(?:grandpa|granddad|grandad)\b', 'grandfather'), (r'\b(?:grandma|granny)\b', 'grandmother'),
+                (r'\bhubby\b', 'husband'), (r'\bbro-in-law\b', 'brother-in-law'), (r'\bsis-in-law\b', 'sister-in-law')]
+_CHAIN = r"((?:(?:father|mother|brother|sister|son|daughter|husband|wife|uncle|aunt|cousin|nephew|niece|grandfather|grandmother|grandson|granddaughter|[a-z]+-in-law)(?: 's|'s)? ?)+)"
+
+
+def informal(text: str) -> str:
+    """How people type, mapped to exam English with exact rules: dad/mom/bro/sis words, first-person questions with no
+    named speaker ("my dad's sister's husband, what is he to me?" -> "X is Y's father's sister's husband. How is X related
+    to Y?"), and all-lowercase text without sentence punctuation ("s is m's brother m is l's mother how is s ...")."""
+    t = text.strip()
+    for pat, rep in INFORMAL_KIN:
+        t = re.sub(pat, rep, t, flags=re.I)
+    low = t.lower().rstrip(' ?.!')
+    if not re.search(r'\b(?:said|says|told|tells|replied|introduc|pointing)', low):
+        m = re.fullmatch(rf"(?:who is |what is |how is )?my {_CHAIN}\s*(?:,|-|—)?\s*(?:what|who|how) (?:is|are) (?:he|she|they|this person|that person)(?: related)? to me", low) \
+            or re.fullmatch(rf"(?:how is|what is) my {_CHAIN}\s*(?:related )?to me", low)
+        if m:
+            chain = re.sub(r"\s*'s\s*", " 's ", m.group(1)).strip()
+            return f"X is Y 's {chain}. How is X related to Y?"
+    if t == t.lower() and '.' not in t.rstrip('.?! ') and len(re.findall(r"\b(?:is|was) ", t)) >= 2:
+        # single letters acting as people, then a sentence break before each new "<letter> is ..." clause and before the question
+        t = re.sub(r"\b([a-z])\b(?=\s*(?:is|was|has|'s|related|said|and)\b|'s)", lambda m_: m_.group(1).upper(), t)
+        t = re.sub(r"\b(of|to|with|than) ([a-z])\b(?=\s*(?:[?.,]|$))", lambda m_: f'{m_.group(1)} {m_.group(2).upper()}', t)
+        people = set(re.findall(r'\b([A-Z])\b', t))   # a letter used as a person once is a person everywhere ('of q q is')
+        t = re.sub(r'\b([b-hj-z])\b', lambda m_: m_.group(1).upper() if m_.group(1).upper() in people else m_.group(1), t)
+        t = re.sub(r"(?<=\w)\s+(?=[A-Z] (?:is|was|has)\b)", '. ', t)
+        t = re.sub(r"\s+(?=(?:how|what|who) (?:is|was)\b)", '. ', t)
+        t = t[:1].upper() + t[1:]
+        if not t.rstrip().endswith('?') and re.search(r'\b(?:how|what|who) (?:is|was)\b', t):
+            t = t.rstrip(' .') + '?'
+    return t
+
 def prepare(text: str, names: list[str] | None = None) -> dict:
     """Model input for a pasted question. names: extra strings to treat as people (the user's "add a name").
     Returns {tokens, ents: [{id, text, kind}], options, question}."""
-    text = strip_boilerplate(normalize(text))
+    text = strip_boilerplate(normalize(informal(text)))
     text, options = split_options(text)
     text = close_question(text)
     raw = []
