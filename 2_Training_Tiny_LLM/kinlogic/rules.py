@@ -46,6 +46,10 @@ def _num(w):
 def clause(c: str):
     """Facts for one clause, or None when it is not a known form. 'x REL y' facts mean y is x's REL."""
     c = c.strip()
+    m = re.fullmatch(rf'{E} is (?:a |an )?(?:stranger to|not (?:at all )?related to|unrelated to) {E}', c) \
+        or re.fullmatch(rf'{E} and {E} are (?:strangers|not related|unrelated)(?: to each other)?', c)
+    if m:   # no family link at all
+        return [f'{m.group(2)} stranger {m.group(1)}']
     m = re.fullmatch(rf'{E} is (?:the |a |an |also the )?{REL} (?:of|to) {E}(?: and (?:the |a |an )?{REL} of {E})?', c)
     if m:
         x, r1, y, r2, y2 = m.groups()
