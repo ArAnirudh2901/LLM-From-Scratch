@@ -16,16 +16,17 @@ import random
 import re
 
 SKIP = re.compile(r'\b(?:members|couples|generations|singles|claim|part|count|who|pair|gen|has|only|not|same|opposite|prof|male|female)\b')
+PUZZLE = re.compile(r'\b(?:members|couples|generations|singles|claim|part|count|who|pair|prof)\b')   # facts about the whole family or the options
 QFORMS = [['how', 'is', 'X', 'related', 'to', 'Y', '?'], ['who', 'is', 'X', 'to', 'Y', '?'], ['what', 'is', 'X', 'to', 'Y', '?'],
           ['how', 'is', 'X', 'related', 'with', 'Y', '?'], ['what', 'is', 'the', 'relation', 'of', 'X', 'to', 'Y', '?']]
 STRANGER = [['X', 'is', 'a', 'stranger', 'to', 'Y', '.'], ['X', 'is', 'not', 'related', 'to', 'Y', '.'],
             ['X', 'and', 'Y', 'are', 'strangers', '.'], ['X', 'and', 'Y', 'are', 'not', 'related', '.']]
 
 
-def split(r):
+def split(r, skip=SKIP):
     """(body tokens up to the last '.', facts without ask, ask) or None for rows this does not fit."""
     t, lf = r.get('tokens'), r.get('lf') or ''
-    if not isinstance(t, list) or 'means' in t or t[-1] != '?' or '.' not in t or SKIP.search(lf):
+    if not isinstance(t, list) or 'means' in t or t[-1] != '?' or '.' not in t or skip.search(lf):
         return None
     facts = [f.strip() for f in lf.split(';') if f.strip()]
     asks = [f for f in facts if f.startswith('ask ')]
@@ -48,7 +49,7 @@ def shift(tokens_or_fact, n, m):
     return [f(w) for w in tokens_or_fact] if isinstance(tokens_or_fact, list) else f(tokens_or_fact)
 
 
-def make(a, b, rng):
+def make(a, b, rng, kind=None):
     from train_reader import answers
     (ba, fa, qa), (bb, fb, _) = a, b
     na = 1 + max(int(w[1:]) for w in ba if re.fullmatch(r'@\d+', w))
@@ -56,7 +57,7 @@ def make(a, b, rng):
     pa = sorted({w for w in ba if w.startswith('@')}, key=lambda w: int(w[1:]))
     pb = sorted({w for w in bb if w.startswith('@')}, key=lambda w: int(w[1:]))
     people = pa + pb
-    kind = rng.choices(['cross', 'stranger', 'distract'], [0.5, 0.25, 0.25])[0]
+    kind = kind or rng.choices(['cross', 'stranger', 'distract'], [0.5, 0.25, 0.25])[0]
     extra, facts = [], fa + fb
     if kind == 'distract':
         y, x = qa.split()[1:3]
