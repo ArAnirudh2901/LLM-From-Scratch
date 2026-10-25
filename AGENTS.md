@@ -1,6 +1,6 @@
 # LLM from Scratch: handbook for any agent or model
 
-Start with `2_Training_Tiny_LLM/JOURNEY.md` (whole journey, intuition, results, lessons, website plan).
+Start with `HANDOFF.md` (current state, next steps), then `2_Training_Tiny_LLM/JOURNEY.md` (whole journey, intuition, results, lessons, website plan).
 
 Keep this file current. When a checkpoint, result, command or decision changes, update it here (and the Claude
 memory noted in CLAUDE.md) and add a line to the handoff log, so the next model can continue cold.
