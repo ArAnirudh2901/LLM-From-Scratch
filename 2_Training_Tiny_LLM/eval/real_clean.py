@@ -47,6 +47,12 @@ def broken(r) -> str | None:
             return 'conflicting code definitions'
     if not r['options'] and not ASK.search(q):
         return 'no question'
+    if re.search(r'\bURL Source:|\bMarkdown Content:|\bPublished Time:', q):
+        return 'page text, not a question'
+    opts = [_norm(t) for _, t in r['options']]
+    place = r'\b(?:north|south|east|west|to the (?:left|right)|(?:immediate )?(?:left|right) of|facing|km|metres?)\b'
+    if opts and sum(bool(re.search(place, o, re.I)) for o in opts) * 2 > len(opts):
+        return 'other topic (seating or direction)'   # options are places, not relations
     key = str(r.get('answer') or '').strip().lower()
     if r['options'] and len(key) == 1 and key not in {str(lab).strip().lower() for lab, _ in r['options']}:
         return 'key not among the options'   # options lost in scraping
