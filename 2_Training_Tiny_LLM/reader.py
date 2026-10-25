@@ -48,12 +48,27 @@ class Vocab:
         return got
 
     def encode(self, toks):
+        toks = _bare_symbols(list(toks))
         if not self.merges:
             return [self.stoi.get(t, self.unk) for t in toks]
         return [i for t in toks for i in self.word(t)]
 
     def __len__(self):
         return len(self.itos)
+
+
+SPARE_SYMBOLS = ['¤', '§', '•', '☆', '∆', '¥', '€']
+
+
+def _bare_symbols(toks):
+    """A bare '@' or '#' is a code symbol ('P @ Q means ...'), but both mark placeholders (@3, #2) and have no token of their
+    own: each becomes a spare symbol the question does not use, the same one throughout (2026-10-25: 167 real
+    questions read these as <unk>, so two different codes looked identical)."""
+    if '@' not in toks and '#' not in toks:
+        return toks
+    spare = iter(s for s in SPARE_SYMBOLS if s not in toks)
+    sub = {b: next(spare) for b in ('@', '#') if b in toks}
+    return [sub.get(t, t) for t in toks]
 
 
 def build_vocab(n_generated: int = 100000, clutrr: str = 'data/clutrr_facts/train.jsonl.gz', seed: int = 0,
@@ -277,6 +292,8 @@ def fact_losses(model, idx, tgt, lm, vocab):
         mt = tgt != -100
         loss_f = F.cross_entropy(model.head(h[mt]).float(), tgt[mt])
     ml = lm != -100
+    if getattr(model, 'prefix_lm', False):   # the question attends both ways: predicting its next word would be copying it
+        ml = torch.zeros_like(ml)
     loss_lm = F.cross_entropy(model.head(h[ml]).float(), lm[ml]) if ml.any() else torch.zeros((), device=idx.device)
     return loss_f, loss_lm
 

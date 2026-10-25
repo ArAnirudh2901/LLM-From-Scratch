@@ -108,7 +108,7 @@ def normalize(text: str) -> str:
             text = text.encode('cp1252').decode('utf-8')
         except (UnicodeEncodeError, UnicodeDecodeError):
             text = text.replace('â€“', '-').replace('â€”', '-').replace('â€™', "'").replace('â€˜', "'").replace('â€œ', '"').replace('â€\x9d', '"')
-    text = unicodedata.normalize('NFKC', text)
+    text = unicodedata.normalize('NFKC', text).replace('\x9d', '')   # stray mojibake byte
     for a, b in (('‘', "'"), ('’', "'"), ('`', "'"), ('“', '"'), ('”', '"'), ('–', '-'), ('—', '-'),
                  ('−', '-'), ('…', '...'), (' ', ' ')):
         text = text.replace(a, b)
