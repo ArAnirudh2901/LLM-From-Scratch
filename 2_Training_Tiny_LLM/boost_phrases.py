@@ -257,3 +257,99 @@ def restyle_rows(rows, rng, n):
         st['restyled'] += 1
         out.append({**r, 'kind': 'style-' + str(r.get('kind', 'q')), 'tokens': new, 'lf': new_lf, 'text': ' '.join(new)})
     return out, st
+
+
+# --- one construction at a time (dataset_spec.CONSTRUCTIONS): each returns (tokens, lf) or None when the row does not
+# fit; build_dataset_v8 applies them until each quota is met ---
+def _split(tokens):
+    sents, tail = sentences(tokens)
+    return [' '.join(s[:-1]) for s in sents], ' '.join(tail)
+
+
+def _join(body, q):
+    return (' '.join(s + ' .' for s in body) + (' ' + q if q else '')).split()
+
+
+def c_exam_copula(tokens, lf, rng):
+    body, q = _split(tokens)
+    new = [(_sent_rewrite(s, rng) or s) for s in body]
+    return (_join(new, q), lf) if new != body else None
+
+
+def c_married(tokens, lf, rng):
+    body, q = _split(tokens)
+    for i, s in enumerate(body):
+        got = _married(s, lf, rng)
+        if got:
+            body[i], new_lf = got
+            return _join(body, q), new_lf
+    return None
+
+
+def c_coordination(tokens, lf, rng):
+    body, q = _split([t for t in (c_exam_copula(tokens, lf, rng) or (tokens, lf))[0]])
+    for i in range(len(body) - 1):
+        m1 = re.fullmatch(rf'{_P} is (the |a |an )?{_R} of {_P}', body[i])
+        m2 = re.fullmatch(rf'{_P} is (the |a |an )?{_R} of {_P}', body[i + 1])
+        if m1 and m2 and m1.group(1) == m2.group(1):
+            body[i:i + 2] = [f'{body[i]} and {m2.group(2) or ""}{m2.group(3)} of {m2.group(4)}'.replace('  ', ' ')]
+            return _join(body, q), lf
+    return None
+
+
+def c_if(tokens, lf, rng):
+    body, q = _split(tokens)
+    if len(body) < 2 or not q.startswith(('how is', 'who is', 'what is')):
+        return None
+    return ('if ' + ' , '.join(body[:-1]) + ' and ' + body[-1] + ' , ' + q).split(), lf
+
+
+def c_question_form(tokens, lf, rng):
+    body, q = _split(tokens)
+    m = QIN.search(q)
+    if not m:
+        return None
+    g = [x for x in m.groups() if x]
+    form = 'how is {a} related to {b} ?' if rng.random() < 0.75 else 'who is {a} to {b} ?'
+    new_q = q.replace(m.group(0), form.format(a=g[0], b=g[1]))
+    return (_join(body, new_q), lf) if new_q != q else None
+
+
+def _merge_kind(tokens, lf, rng, want):
+    body, q = _split((c_exam_copula(tokens, lf, rng) or (tokens, lf))[0])
+    for i in range(len(body) - 1):
+        a, b = body[i], body[i + 1]
+        m1 = re.fullmatch(rf'{_P} (is|was) ((?:the |a |an )?{_R[1:-1]}) of {_P}', a)
+        if m1:
+            x, v, r, y = m1.groups()
+            m2 = re.fullmatch(rf'{re.escape(y)} (is|was|has|had) (.+)', b)
+            if want == 'comma' and m2:
+                body[i:i + 2] = [f'{x} {v} {r} of {y} , who {m2.group(1)} {m2.group(2)}']
+                return _join(body, q), lf
+            m2 = re.fullmatch(rf'{re.escape(x)} (is|was|has|had) (.+)', b)
+            if m2 and want in ('comma', 'nocomma'):
+                body[i:i + 2] = [f'{x} , who {v} {r} of {y} , {m2.group(1)} {m2.group(2)}' if want == 'comma' else f'{x} who {v} {r} of {y} {m2.group(1)} {m2.group(2)}']
+                return _join(body, q), lf
+            m2 = re.fullmatch(rf'{re.escape(y)} (is|was|has|had) (.+)', b)   # "Y is the R of X . X is ..." -> "X , whose R is Y , is ..."
+            if want == 'whose':
+                m3 = re.fullmatch(rf'{_P} (?:is|was) (?:the )?{_R} of {_P}', a)
+                if m3:
+                    yy, rr, xx = m3.groups()
+                    m4 = re.fullmatch(rf'{re.escape(xx)} (is|was|has|had) (.+)', b)
+                    if m4 and not rr.startswith(('a ', 'an ')):
+                        body[i:i + 2] = [f'{xx} , whose {rr} is {yy} , {m4.group(1)} {m4.group(2)}']
+                        return _join(body, q), lf
+    return None
+
+
+CONSTRUCT = {
+    'exam copula (Y is the R of X)': c_exam_copula,
+    'relative clause, comma (, who is)': lambda t, l, r: _merge_kind(t, l, r, 'comma'),
+    'relative clause, no comma (who is)': lambda t, l, r: _merge_kind(t, l, r, 'nocomma'),
+    'whose clause': lambda t, l, r: _merge_kind(t, l, r, 'whose'),
+    'coordination (and the S of)': c_coordination,
+    'married to': c_married,
+    'if-conditional': c_if,
+    'exam question forms': c_question_form,
+    'plain (generator wording kept)': lambda t, l, r: (list(t), l),
+}
