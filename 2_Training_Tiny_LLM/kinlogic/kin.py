@@ -69,7 +69,7 @@ ONLY = set(KIN)   # "only son", "only grandson", "only daughter-in-law", "only m
 SIDED = {w for w, ps in KIN.items() if all(p[0].m == 'U' and len(p) > 1 for p in ps)}
 # Links that are not family; reported when no family link exists.
 NONKIN = {'friend', 'neighbour', 'colleague', 'classmate', 'teacher', 'student', 'boss', 'employee', 'roommate',
-          'doctor', 'patient', 'coach', 'teammate', 'partner', 'acquaintance'}
+          'doctor', 'patient', 'coach', 'teammate', 'partner', 'acquaintance', 'stranger'}
 
 
 def paths_of(word: str, side: str | None = None) -> list[list[Step]] | None:

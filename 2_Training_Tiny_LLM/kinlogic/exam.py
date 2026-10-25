@@ -21,6 +21,7 @@ from .prepare import prepare
 CANT = re.compile(r"cannot be determined|can.?t be determined|data (?:is )?inadequate|insufficient|not possible to determine|"
                   r"cannot be established|can.?t say", re.I)
 NONE = re.compile(r'none of (?:these|the above)', re.I)
+NOREL = re.compile(r"\bno (?:blood |family )?relation|\bnot (?:at all )?related\b|\bunrelated\b|\bstrangers?\b", re.I)
 NUM_WORDS = {w: i for i, w in enumerate('zero one two three four five six seven eight nine ten eleven twelve'.split())}
 SYN = {'dad': 'father', 'mom': 'mother', 'mum': 'mother', 'grand father': 'grandfather', 'grand mother': 'grandmother',
        'grand son': 'grandson', 'grand daughter': 'granddaughter', 'in law': 'in-law', 'cousin brother': 'cousin',
@@ -440,6 +441,12 @@ def _answer_one(p, lf, read, priors):
     if t == 'ask':
         cands = list(q['answers'])
         status = 'gender' if q['status'] == 'unique' and cands[0].get('moves') and not cands[0].get('gender') else q['status']
+        puzzle = any(s['t'] in ('members', 'couples', 'generations', 'singles') for s in stmts)   # everyone there is one family
+        if cands and not puzzle and all(a.get('key') == 'none' or a.get('nonkin') for a in cands):
+            nk = cands[0].get('nonkin')   # no family link between them in any family that fits: not related
+            lab = (match_option(nk, options) if nk else None) or _labelled(options, NOREL)
+            if lab or not options:
+                return {**out, **res, 'status': 'unrelated', 'answer': f'not related ({nk})' if nk else 'not related', 'option': lab}
         if spoken and options and any(len(re.split(r'\s+or\s+|/', o)) > 1 for _, o in options):
             r2 = solve(stmts, people=people, priors=priors, smallest=False)   # "Either father or uncle": the setter names every family, not the smallest
             q2 = r2['questions'][-1] if r2.get('ok') and r2.get('questions') else None
