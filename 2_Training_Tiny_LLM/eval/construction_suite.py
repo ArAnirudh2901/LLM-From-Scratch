@@ -20,7 +20,7 @@ HINDI = {'mama': ('maternal uncle', 'M'), 'chacha': ('paternal uncle', 'M'), 'bu
 INFORMAL = {'father': 'dad', 'mother': 'mom', 'brother': 'bro', 'sister': 'sis'}
 KINDS = ['copula 2', 'copula 3', 'possessive chain', 'of-chain', 'who clause (nearest)', 'who clause (subject)', 'whose clause',
          'stacked clauses', 'coordination', 'married to', 'if-conditional', 'question first', 'pronoun', 'apposition',
-         'speech (pointing)', 'informal first person', 'lowercase no punctuation', 'negation', 'count + only', 'gender from spouse', 'gender from another relation', 'gender unknown', 'names (gendered)']
+         'speech (pointing)', 'informal first person', 'lowercase no punctuation', 'negation', 'count + only', 'gender from spouse', 'gender from another relation', 'gender unknown', 'names (gendered)', 'no relation', 'stranger']
 
 
 def _rel(rng):
@@ -94,6 +94,10 @@ def make(kind, rng, NM, NF):
         t, fs = f'{A} is the sibling of {B}. {A} is the {r3} of {D}. {B} is the {r2} of {C}. How is {A} related to {C}?', ['@B sibling @A', f'@D {r3} @A', f2, 'ask @C @A']
     elif kind == 'gender unknown':
         t, fs = f'{A} is the child of {B}. {B} is the sibling of {C}. How is {A} related to {C}?', ['@B child @A', '@C sibling @B', 'ask @C @A']
+    elif kind == 'no relation':
+        t, fs = f'{A} is the {r1} of {B}. {C} is the {r2} of {D}. How is {A} related to {D}?', [f1, f'@D {r2} @C', 'ask @D @A']
+    elif kind == 'stranger':
+        t, fs = f'{A} is a stranger to {B}. {B} is the {r2} of {C}. How is {A} related to {B}?', ['@B stranger @A', f2, 'ask @B @A']
     elif kind == 'names (gendered)':
         nA = rng.choice(NM if g1 == 'M' else NF)
         nB, nC = rng.choice([n for n in NM + NF if n != nA]), rng.choice([n for n in NM + NF if n != nA])
