@@ -435,18 +435,29 @@ def main():
     held = [e for e in (encode_example(vocab, d['tokens'], d['lf'], cfg['block_size']) for d in dev[:256]) if e]   # fixed: held-out loss
     while step < a.steps:
         batch = next(it)
-        parts = [batch[j::a.accum] for j in range(a.accum)] if a.accum > 1 else [batch]   # same batch, less memory per pass
         for g in opt.param_groups:
             g['lr'] = lr_at(step) * g.get('scale', 1.0)
         cap = max((k for f, k in curriculum if f <= step / a.steps), default=getattr(model, 'n_loop', 1))   # grows with training (retrofitted recurrence)
         model.set_loops(loop_rng.randint(1, cap) if a.loop_random else cap) if getattr(model, 'n_loop', 1) > 1 else None
         opt.zero_grad(set_to_none=True)
-        for part in parts:
-            idx, tgt, lm = collate(part, pad, device)
-            with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
-                loss_f, loss_lm = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab)
-                loss = (loss_f + a.lm_weight * loss_lm) / len(parts)
-            scaler.scale(loss).backward()
+        while True:
+            parts = [batch[j::a.accum] for j in range(a.accum)] if a.accum > 1 else [batch]   # same batch, less memory per pass
+            try:
+                for part in parts:
+                    idx, tgt, lm = collate(part, pad, device)
+                    with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
+                        loss_f, loss_lm = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab)
+                        loss = (loss_f + a.lm_weight * loss_lm) / len(parts)
+                    scaler.scale(loss).backward()
+                break
+            except RuntimeError as e:   # torch.OutOfMemoryError too: long rows; same batch in more passes
+                if 'out of memory' not in str(e) or a.accum >= len(batch):
+                    raise
+                opt.zero_grad(set_to_none=True)
+                idx = tgt = lm = loss = None
+                torch.cuda.empty_cache()
+                a.accum *= 2
+                print(f'  out of GPU memory: {a.accum} passes per batch from now on', flush=True)
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(opt)
