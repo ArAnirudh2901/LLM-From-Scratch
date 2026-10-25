@@ -24,7 +24,7 @@ PEOPLE_BINS = [2, 3, 4, 5, 6, 7, 8, 10, 13, 99]
 LEN_BINS = [30, 45, 60, 80, 100, 130, 170, 999]
 FILL = {'married to': 'married to', 'if-conditional (if X is ... , how)': 'if-conditional', 'coordination (R of Y and the S of Z)': 'coordination (and the S of)',
         'who is (no comma)': 'relative clause, no comma (who is)', ', who is/was/has (relative clause)': 'relative clause, comma (, who is)',
-        ', whose R is': 'whose clause', 'Q: how is X related to Y': 'exam question forms'}   # phrase type -> boost_phrases.CONSTRUCT rewrite
+        ', whose R is': 'whose clause', 'Q: how is X related to Y': 'exam question forms', ', which/that': 'that clause'}   # phrase type -> boost_phrases.CONSTRUCT rewrite
 
 
 def _bin(x, edges):
@@ -65,6 +65,16 @@ def _fill(job):
     how, con, row, seed = job
     if how == 'j':
         return _joined((row[0], row[1], seed))
+    if con == 'that clause':   # "X is the son of Y , that is the brother of Z": a comma clause with "that"
+        r = _fill(('c', 'relative clause, comma (, who is)', row, seed))
+        if r:
+            t = list(r['tokens'])
+            i = next((k for k in range(len(t) - 1) if t[k] == ',' and t[k + 1] == 'who'), None)
+            if i is None:
+                return None
+            t[i + 1] = 'that'
+            return {**r, 'tokens': t, 'kind': 'v8-that-clause-' + str(row.get('kind'))}
+        return None
     from build_dataset_v8 import _construct
     return _construct((con, row, seed))[1]
 
@@ -83,6 +93,9 @@ def main():
     ap.add_argument('--cand', type=int, default=220000)
     ap.add_argument('--joined', type=int, default=24000)
     ap.add_argument('--workers', type=int, default=5)
+    ap.add_argument('--floor', type=int, default=3000, help='minimum rows of every phrase type, fact type, length and family-size bin')
+    ap.add_argument('--floor_answer', type=int, default=1500, help='minimum rows of every named relation answer')
+    ap.add_argument('--floor_kind', type=int, default=6000, help='minimum rows of every question kind')
     ap.add_argument('--strict', action='store_true', help='exit 2 when a real share of 1%+ is still met at under 3/4')
     a = ap.parse_args()
     rng = random.Random(9)
@@ -98,6 +111,7 @@ def main():
     cand = cand[:a.cand]
     from build_norel import PUZZLE, split as split_
     src = [r for r in extra + pool if len(r['tokens']) < 120 and split_(r, PUZZLE)]   # joinable: each part must split cleanly
+    long_src = [r for r in src if len(r['tokens']) >= 45] or src   # long questions are built from long parts
     with Pool(a.workers) as p:
         joined = [r for r in p.map(_joined, [(rng.choice(src), [rng.choice(src) for _ in range(rng.choice([1, 2, 2, 3]))], i)
                                              for i in range(a.joined * 2)], chunksize=100) if r][:a.joined]
@@ -118,13 +132,23 @@ def main():
     key = ("X 's R is Y", "Y is X 's R", 'of-chain', 'said / says', 'pointing', 'only (only son', 'grand-/great-', 'if-conditional', 'married to',
            'who is (no comma)', ', who is/was', ', whose R is', 'negation', 'paternal / maternal', 'code symbols', 'Q: how is X related to Y',
            'coordination', 'brother-/sister-', 'pronouns')
-    flags = [k for k in PAT if ps[k] > 0.02 and k.startswith(key)]
+    flags = list(PAT)   # every phrase type phrase_audit knows
     pr = collections.Counter(_bin(len(set(re.findall(r'@\d+', t))), PEOPLE_BINS) for t in rtxt)
     lr = collections.Counter(_bin(len(t.split()), LEN_BINS) for t in rtxt)
     floor = lambda c, n: {k: max(v / n, 0.01) for k, v in c.items()}
 
-    targets = {'answer': t_ans, 'kind': CATS, 'people': floor(pr, len(rtxt)), 'length': floor(lr, len(rtxt))}
-    targets.update({'ph:' + k: {True: ps[k], False: 1 - ps[k]} for k in flags})
+    F, FA, FK = a.floor / a.rows, a.floor_answer / a.rows, a.floor_kind / a.rows   # minimum share of every type: large absolute numbers
+    named = [k for k in seen if "'s" not in k and k not in ('several', 'other', 'none')]
+    for k in named:
+        t_ans[k] = max(t_ans[k], FA)
+    norm = lambda d: {k: v / sum(d.values()) for k, v in d.items()}
+    targets = {'answer': norm(t_ans), 'kind': norm({k: max(v, FK) for k, v in CATS.items()}),
+               'people': norm({k: max(v, F) for k, v in floor(pr, len(rtxt)).items()}),
+               'length': norm({k: max(v, F) for k, v in floor(lr, len(rtxt)).items()})}
+    targets.update({'ph:' + k: {True: max(ps[k], F), False: 1 - max(ps[k], F)} for k in flags})
+    from mixture_audit import FACTS
+    have = collections.Counter(w for r in cand for w in FACTS if w in r['lf'])
+    targets.update({'fact:' + w: {True: max(have[w] / len(cand), F), False: 1 - max(have[w] / len(cand), F)} for w in FACTS})
 
     def featurize(rows, labs):
         texts = [' '.join(r['tokens']) for r in rows]
@@ -133,37 +157,85 @@ def main():
              'people': [_bin(len(set(re.findall(r'@\d+', t))), PEOPLE_BINS) for t in texts],
              'length': [_bin(len(r['tokens']), LEN_BINS) for r in rows]}
         f.update({'ph:' + k: [bool(PAT[k].search(t)) for t in texts] for k in flags})
+        f.update({'fact:' + w: [w in r['lf'] for r in rows] for w in FACTS if 'fact:' + w in targets})
         return f
 
-    def rake(feats, n):
-        w = [1.0] * n
-        for _ in range(12):
-            for g, vals in feats.items():
-                tot = collections.defaultdict(float)
-                for x, wi in zip(vals, w):
-                    tot[x] += wi
-                s_ = sum(tot.values())
-                f = {x: (targets[g].get(x, tot[x] / s_) / (tot[x] / s_)) ** 0.6 if tot[x] else 1.0 for x in tot}   # damped: keeps more rows in play
-                w = [min(5.0, max(0.03, wi * f[x])) for x, wi in zip(vals, w)]
-        return w
+    import numpy as np
 
-    def shares_of(feats, w):
+    def coded(feats_):
         out = {}
-        for g, vals in feats.items():
-            tot = collections.defaultdict(float)
-            for x, wi in zip(vals, w):
-                tot[x] += wi
-            s_ = sum(tot.values())
-            out[g] = {x: v / s_ for x, v in tot.items()}
+        for g, vals in feats_.items():
+            keys = sorted(set(vals), key=str)
+            idx = {k: i for i, k in enumerate(keys)}
+            out[g] = (keys, np.fromiter((idx[v] for v in vals), dtype=np.int32, count=len(vals)))
+        return out
+
+    def rake(feats_, n):
+        cd = coded(feats_)
+        w = np.ones(n)
+        for _ in range(12):
+            for g, (keys, c) in cd.items():
+                tot = np.bincount(c, weights=w, minlength=len(keys))
+                sh = tot / tot.sum()
+                tg = np.array([targets[g].get(k, sh[i]) for i, k in enumerate(keys)])
+                f = np.where(tot > 0, (tg / np.maximum(sh, 1e-12)) ** 0.6, 1.0)   # damped: keeps more rows in play
+                w = np.clip(w * f[c], 0.03, 5.0)
+        return list(w)
+
+    def shares_of(feats_, w):
+        cd, w = coded(feats_), np.asarray(w)
+        out = {}
+        for g, (keys, c) in cd.items():
+            tot = np.bincount(c, weights=w, minlength=len(keys))
+            out[g] = {k: tot[i] / tot.sum() for i, k in enumerate(keys)}
         return out
 
     def gaps(got):
         """(group, value, target, got) wherever a real share of at least 1% is met at under 3/4."""
         return [(g, x, t, got[g].get(x, 0.0)) for g, tg in targets.items() for x, t in tg.items()
-                if t >= 0.01 and got[g].get(x, 0.0) < 0.75 * t and not (g.startswith('ph:') and x is False)]
+                if t * a.rows >= 1000 and got[g].get(x, 0.0) < 0.75 * t and not (g.startswith(('ph:', 'fact:')) and x is False)]
 
+    def scarce(feats_):
+        need = {}
+        for g, tg in targets.items():
+            for x, t in tg.items():
+                if (g.startswith(('ph:', 'fact:')) and x is False) or t * a.rows < 100:
+                    continue
+                n = sum(1 for v in feats_[g] if v == x)
+                if n < t * a.rows / 4:   # at most ~4 copies of a row on average
+                    need[(g, x)] = int(t * a.rows / 4) - n
+        return need
+
+    absent = [g for g in list(targets) if g.startswith('fact:') and not any(w in r['lf'] for r in cand for w in [g[5:]])]
+    for g in absent:   # facts this pool never writes (the training pool may): reported, not gated
+        print('not in this pool:', g, flush=True)
+        targets.pop(g)
     feats = featurize(cand, labels)
-    for rnd in range(3):   # fill what raking cannot reach: verified new rows, then rake again
+    need = scarce(feats)
+    print(f'{len(need)} types short of distinct rows before the pool scan', flush=True)
+    if need:
+        files = sorted(glob.glob(f'{a.pool}/kinds/*.jsonl.gz')) + sorted(glob.glob(f'{a.pool}/deep/**/*.jsonl.gz', recursive=True))
+        seen_t = {' '.join(r['tokens']) for r in cand}
+        for f in files:
+            batch = [r for r in rows_of(f) if ok(r) and ' '.join(r['tokens']) not in seen_t]
+            if not batch or not need:
+                continue
+            with Pool(a.workers) as p:
+                bl = [BASE(x) if x else 'other' for x in p.map(_label, batch, chunksize=300)]
+            bf = featurize(batch, bl)
+            take = []
+            for i in range(len(batch)):
+                hit = [k for k in need if need[k] > 0 and bf[k[0]][i] == k[1]]
+                if hit:
+                    take.append(i)
+                    for k in hit:
+                        need[k] -= 1
+            need = {k: v for k, v in need.items() if v > 0}
+            cand += [batch[i] for i in take]
+            for g in feats:
+                feats[g] += [bf[g][i] for i in take]
+            print(f'  {f.split("/")[-1]}: +{len(take)} rows for scarce types, {len(need)} still short', flush=True)
+    for rnd in range(4):   # fill what raking cannot reach: verified new rows, then rake again
         w = rake(feats, len(cand))
         todo = gaps(shares_of(feats, w))
         print(f'round {rnd}: {len(todo)} gaps', [(g, str(x), round(t, 3), round(v, 3)) for g, x, t, v in todo][:12], flush=True)
@@ -171,12 +243,12 @@ def main():
             break
         jobs = []
         for g, x, t, v in todo:
-            k = int(min(20000, (t - v) * len(cand) * 1.5))
+            k = int(min(60000, (t - v) * len(cand) * 3))
             con = FILL.get(g[3:]) if g.startswith('ph:') else None
             if con:   # rewrite rows into the missing construction (engine re-checks changed facts)
                 jobs += [('c', con, rng.choice(cand), rng.randrange(10 ** 9)) for _ in range(k)]
             elif g in ('length', 'people') or (g == 'kind' and x == 'long text'):   # long questions, big families: join verified questions
-                jobs += [('j', None, (rng.choice(src), [rng.choice(src) for _ in range(rng.choice([2, 3, 3, 4]))]), rng.randrange(10 ** 9)) for _ in range(k)]
+                jobs += [('j', None, (rng.choice(long_src), [rng.choice(long_src) for _ in range(rng.choice([2, 3, 3, 4]))]), rng.randrange(10 ** 9)) for _ in range(k)]
         with Pool(a.workers) as p:
             new = [r for r in p.map(_fill, jobs, chunksize=100) if r]
         if not new:
@@ -188,6 +260,7 @@ def main():
         for g in feats:
             feats[g] += nf[g]
         print(f'  +{len(new)} verified rows from {len(jobs)} tries', flush=True)
+    w = rake(feats, len(cand))   # the last round's new rows are weighted too
     from eval.leak import Guard
     guard = Guard()
     w = [0.0 if guard.leaks(r['tokens']) else wi for r, wi in zip(cand, w)]   # no evaluation question, ever
