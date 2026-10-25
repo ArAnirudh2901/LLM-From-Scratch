@@ -675,3 +675,49 @@ def with_exact_clauses(read):
             out[b] = list(prev) + [(_merge_exact(facts, ask, g if isinstance(g, str) else g[0]), g[1] if not isinstance(g, str) else 0.0) for g in prev]
         return out
     return run
+
+
+_REL_RE = r"(?:the )?(?:only )?(?:paternal |maternal )?[a-z][a-z-]*"
+_CLAUSES = [
+    # "X is the R of Y , who is the S of Z" -> "X is the R of Y . Y is the S of Z" (who = the nearest person)
+    (re.compile(rf"([@#]\d+) (is|was) ({_REL_RE}) of ([@#]\d+) , (?:who|which) (is|was|has) ([^.;?,]+?)(?= [.;?,]|$)"), r"\1 \2 \3 of \4 . \4 \5 \6"),
+    # "X , who is the R of Y , is/has ..." -> "X is the R of Y . X is/has ..." (who = the subject)
+    (re.compile(r"(^|[.;] )([@#]\d+) , (?:who|which) (is|was|has) ([^.;?,]+?) , (is|was|has|had) "), r"\1\2 \3 \4 . \2 \5 "),
+    # "X , whose R is Y , ..." -> "X 's R is Y . X ..."
+    (re.compile(r"(^|[.;] )([@#]\d+) , whose ([a-z-]+) is ([@#]\d+) , "), r"\1\2 's \3 is \4 . \2 "),
+]
+
+
+def simplify(tokens):
+    """Relative clauses split into plain sentences (sentence decomposition, TACL 2023: natural questions mapped to the
+    simple shapes a parser trained on synthetic text reads well). Same meaning; None when nothing changes."""
+    text = ' '.join(tokens)
+    out = text
+    for pat, rep in _CLAUSES:
+        for _ in range(4):   # nested clauses
+            new = pat.sub(rep, out)
+            if new == out:
+                break
+            out = new
+    return out.split() if out != text else None
+
+
+def with_simplified(read):
+    """One more set of readings for questions with relative clauses: the same question with its clauses split into
+    plain sentences (exam.simplify), read by the same model; every reading joins the vote."""
+    def run(batch):
+        out = read(batch)
+        idx, alt = [], []
+        for b, toks in enumerate(batch):
+            s = simplify(list(toks))
+            if s:
+                idx.append(b)
+                alt.append(s)
+        if alt:
+            got = read(alt)
+            for b, g in zip(idx, got):
+                prev = out[b] if isinstance(out[b], list) else [(out[b], 0.0)]
+                add = g if isinstance(g, list) else [(g, 0.0)]
+                out[b] = list(prev) + list(add)
+        return out
+    return run
