@@ -660,6 +660,73 @@ def with_split(read, min_sentences: int = 3):
     return run
 
 
+QFACTS = ('ask', 'who', 'count', 'gender', 'pair', 'prof')
+WHOLE = ('members', 'couples', 'generations', 'singles')   # facts about the whole family: checked only on full readings
+
+
+def _readings(got):
+    """[(facts, score)] from one read() result, best first."""
+    if isinstance(got, str):
+        return [(got, 0.0)]
+    return [(g, 0.0) if isinstance(g, str) else (g[0], g[1]) for g in got or []]
+
+
+def with_split_search(read, k: int = 3, beam: int = 4, min_sentences: int = 3):
+    """Sentence-level beam search checked by the engine (as SentBS and execution-guided decoding): each statement
+    sentence is read on its own (k readings), sentences are joined in order keeping the `beam` most likely joins the
+    engine finds consistent, and those whole readings join the vote. A misread sentence usually contradicts the others,
+    so the engine picks which reading of it fits."""
+    def consistent(facts):
+        try:
+            stmts, _ = parse(' ; '.join(f for f in facts if f.split()[0] not in WHOLE))
+            return bool(stmts) is False or solve(stmts).get('ok', True)
+        except Exception:
+            return True
+
+    def renumber(lf, n):
+        out, ren = [], {}
+        for st in (x.split() for x in lf.split(';') if x.strip()):
+            if not st or st[0] in QFACTS:
+                continue
+            for i, t in enumerate(st):
+                if t[0] == '#':
+                    if t not in ren:
+                        n += 1
+                        ren[t] = f'#{n}'
+                    st[i] = ren[t]
+            out.append(' '.join(st))
+        return out, n
+
+    def run(batch):
+        out = read(batch)
+        for b, toks in enumerate(batch):
+            sents = _sentences(list(toks))
+            if len(sents) < min_sentences or not any(t == '?' for t in sents[-1]):
+                continue
+            q = sents[-1]
+            parts = read([s + q for s in sents[:-1]] + [q])
+            qr = _readings(parts[-1])
+            question = [x.strip() for x in (qr[0][0] if qr else '').split(';') if x.strip().split()[:1] and x.split()[0] in QFACTS]
+            if not question:
+                continue
+            beams = [([], 0.0, 0)]
+            for got in parts[:-1]:
+                opts = _readings(got)[:k] or [('', 0.0)]
+                nxt = []
+                for facts, sc, n in beams:
+                    for lf, s2 in opts:
+                        f2, n2 = renumber(lf, n)
+                        nxt.append((facts + f2, sc + s2, n2))
+                nxt.sort(key=lambda x: -x[1])
+                kept = [c for c in nxt[:beam * k] if consistent(c[0])][:beam]
+                beams = kept or nxt[:1]
+            prev = out[b] if isinstance(out[b], list) else [(out[b], 0.0)]
+            extra = [(' ; '.join(list(dict.fromkeys(f)) + question), sc / max(1, len(parts) - 1)) for f, sc, _ in beams]
+            out[b] = list(prev) + extra
+        return out
+    return run
+
+
 def _merge_exact(exact, ask, lf):
     """A model reading with the clauses the rules understood replaced by their exact facts: model facts about a named
     pair the exact facts cover are dropped, the exact question wins, the rules' unnamed people are renumbered apart."""

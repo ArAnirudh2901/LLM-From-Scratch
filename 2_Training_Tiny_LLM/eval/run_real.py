@@ -129,6 +129,7 @@ if __name__ == '__main__':
     ap.add_argument('--hybrid', action='store_true', help='model readings also merged with the exact facts of the clauses the rules understand (exam.with_exact_clauses)')
     ap.add_argument('--by_sentence', action='store_true', help='long questions also read sentence by sentence (exam.with_split), one more vote')
     ap.add_argument('--para', type=int, default=0, help='vote over N extra copies of each question (renamed people, new code symbols, options in place)')
+    ap.add_argument('--split_search', action='store_true', help='long questions: sentence-level beam search checked by the engine (exam.with_split_search)')
     ap.add_argument('--cover', action='store_true', help='readings that leave a named person out weigh less in the vote (KIN_COVER)')
     ap.add_argument('--perturb', type=int, default=0, help='also score N altered copies of each question (eval.perturb: shuffled options, renamed people, new code symbols)')
     ap.add_argument('--reworded', default=None, help='also score kept reworded copies (eval.reword_real) against their originals')
@@ -154,6 +155,9 @@ if __name__ == '__main__':
     if a.by_sentence:
         from kinlogic.exam import with_split
         read = with_split(read)
+    if a.split_search:
+        from kinlogic.exam import with_split_search
+        read = with_split_search(read)
     if a.simplify:
         from kinlogic.exam import with_simplified
         read = with_simplified(read)
