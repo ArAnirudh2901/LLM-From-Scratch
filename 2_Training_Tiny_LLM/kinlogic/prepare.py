@@ -244,7 +244,7 @@ def informal(text: str) -> str:
         t = re.sub(r"\b([a-z])\b(?=\s*(?:is|was|has|'s|related|said|and)\b|'s)", lambda m_: m_.group(1).upper(), t)
         t = re.sub(r"\b(of|to|with|than) ([a-z])\b(?=\s*(?:[?.,]|$))", lambda m_: f'{m_.group(1)} {m_.group(2).upper()}', t)
         people = set(re.findall(r'\b([A-Z])\b', t))   # a letter used as a person once is a person everywhere ('of q q is')
-        t = re.sub(r'\b([b-hj-z])\b', lambda m_: m_.group(1).upper() if m_.group(1).upper() in people else m_.group(1), t)
+        t = re.sub(r"(?<!['’])\b([b-hj-z])\b", lambda m_: m_.group(1).upper() if m_.group(1).upper() in people else m_.group(1), t)
         t = re.sub(r"(?<=\w)\s+(?=[A-Z] (?:is|was|has)\b)", '. ', t)
         t = re.sub(r"\s+(?=(?:how|what|who) (?:is|was)\b)", '. ', t)
         t = t[:1].upper() + t[1:]
