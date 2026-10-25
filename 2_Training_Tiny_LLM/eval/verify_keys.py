@@ -15,6 +15,7 @@ Results: data/real_questions/keys_verified.json {question hash: {status, key, wa
 from __future__ import annotations
 
 import hashlib
+import glob
 import json
 import os
 import re
@@ -92,7 +93,7 @@ def main():
     rows = [r for r in load_real() if not broken(r) and r.get('options') and r.get('answer')]
     if SHARD:
         i, n = map(int, SHARD.split('/'))
-        others = json.load(open(OUT)) if os.path.exists(OUT) else {}   # already checked by the unsharded run
+        others = {k: v for f in glob.glob(OUT.replace('.json', '*.json')) if f != out for k, v in json.load(open(f)).items()}   # already checked by another run
         rows = [r for j, r in enumerate(rows) if j % n == i and qhash(r) not in others]
     save = lambda: json.dump(done, open(out, 'w'), indent=0)
     todo = [r for r in rows if qhash(r) not in done]
