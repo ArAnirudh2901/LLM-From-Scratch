@@ -115,7 +115,7 @@ def explain(stmts: list[dict], result: dict, q_index: int = 0, names: dict | Non
             if best.get('hindi'):
                 ans = ans[:-1] + f"; in Hindi, {best['hindi']}."
         lines.append(f'[INFERENCE]: {ans}')
-        answer = best['label'] if best['key'] not in ('none',) else 'No relation given'
+        answer = (best.get('label') or best.get('nonkin') or best['key']) if best['key'] not in ('none',) else 'No relation given'
     elif ask['t'] == 'who':
         who = [show(n) for n in best.get('names', [])]
         answer = ', '.join(who) or 'not named in the question'

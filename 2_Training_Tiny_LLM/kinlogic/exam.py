@@ -35,7 +35,7 @@ def option_moves(text: str):
     t = ' ' + text.lower().strip(' .') + ' '
     for a, b in SYN.items():
         t = t.replace(f' {a} ', f' {b} ').replace(f' {a}-', f' {b}-').replace(f'{a} ', f'{b} ')
-    t = re.sub(r"\b(his|her|my|the|a|an|their)\b", ' ', t)
+    t = re.sub(r"\b(his|her|my|the|a|an|their|either)\b", ' ', t)
     parts = [p.strip() for p in t.split(' of ') if p.strip()][::-1]   # "x of y" -> y then x
     words = []
     for part in parts:
@@ -222,7 +222,10 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
     readings = [(got, 0.0)] if isinstance(got, str) else [(g, 0.0) if isinstance(g, str) else (g[0], g[1]) for g in got]
     results = []
     for k, (lf, score) in enumerate(readings):
-        res = _answer_one(p, lf, read, priors)
+        try:
+            res = _answer_one(p, lf, read, priors)
+        except Exception as e:   # one bad reading drops out of the vote, not the whole question
+            res = {'answer': 'error', 'option': None, 'status': 'error', 'explanation': f'{type(e).__name__}: {e}', 'facts': lf}
         res['reading'] = k
         results.append((res, score))
     good = [(r, sc) for r, sc in results if r['status'] not in ('error', 'contradiction', 'none')]
@@ -437,6 +440,13 @@ def _answer_one(p, lf, read, priors):
     if t == 'ask':
         cands = list(q['answers'])
         status = 'gender' if q['status'] == 'unique' and cands[0].get('moves') and not cands[0].get('gender') else q['status']
+        if spoken and options and any(len(re.split(r'\s+or\s+|/', o)) > 1 for _, o in options):
+            r2 = solve(stmts, people=people, priors=priors, smallest=False)   # "Either father or uncle": the setter names every family, not the smallest
+            q2 = r2['questions'][-1] if r2.get('ok') and r2.get('questions') else None
+            if q2 and q2['status'] in ('conditional', 'ambiguous') and q2['answers']:
+                a2, lab2 = _relation_option(list(q2['answers']), [(l, o) for l, o in options if len(re.split(r'\s+or\s+|/', o)) > 1], q2['status'])
+                if lab2:
+                    return {**out, **res, 'answer': a2.get('label') or a2['key'], 'option': lab2}
         if options and q['status'] == 'gender' and len({a.get('key') for a in cands}) > 1 and _labelled(options, CANT):
             return {**out, **res, 'answer': 'cannot be determined', 'option': _labelled(options, CANT)}   # only a gender the text never gives decides
         a, lab = _relation_option(cands, options, status) if options else (cands[0], None)
