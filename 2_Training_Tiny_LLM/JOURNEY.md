@@ -64,7 +64,7 @@ option matching, "not related", "Either X or Y"). Answer-time boosters (`eval/ru
 - Colab accounts by authuser index (memory `colab-accounts.md`); Gemini keys `~/.config/kinthread/gemini*.env` (10).
 - Repos: LLM-From-Scratch (code), Kinthread-llm-model (code subtree + weights/data), Kinthread (website).
 
-## Website (not yet on the new model)
+## Website (not yet on the new model; detailed plan: ~/Web_Dev/kinthread/MODEL_UPGRADE_PLAN.md)
 Kinthread (`~/Web_Dev/kinthread`, Cloudflare Pages) still runs the v8 QA model in WASM. To ship the new reader:
 (a) browser: export v10 reader to ONNX fp32 (~160 MB, split < 25 MB parts with SHA manifest as the site already does),
 onnxruntime-web for the grammar-constrained beam, kinlogic (pure Python) via Pyodide or a JS port; or (b) a hosted
