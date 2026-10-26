@@ -34,3 +34,26 @@ use the private bundle `~/kinthread_handoff.tgz` (memory, Gemini keys, real ques
   repo as the owner's GitHub account (see AGENTS.md "Owner's hard rules"); never act as another gh account.
 - Never type passwords or create accounts; secrets (Gemini keys) only in `~/.config/kinthread/*.env`, never printed.
 - Heavy jobs on Kaggle/Colab, not the 8 GB Mac. Keep tool calls and replies short (owner's usage limit).
+
+## Update 2026-10-26
+Final pick is v10-r8p step 6,000; the selected Kaggle checkpoint and `/Users/anirudharavalli/Downloads/best.zip` are byte-identical (SHA-256 `38c289d351d6517b5cde1bc9fb64ea97bd33eee193639d6351edda52fdfd7a52`). Full-dev winner: `all` boosters; 73.9% fair / 77.2% verified on dev and 68.8% / 72.2% on the locked test (scored once). See the new latest entry in AGENTS.md and the final row in JOURNEY.md.
+
+Website migration started in `~/Web_Dev/kinthread`: canonical code now has `export_reader_web.py`, whose smoke export gave 39.50M exact-fp32 weights (158.0 MB raw, 126.1 MB gzip). Website is still v8; the v10 reader WASM and Pyodide pipeline are not integrated into its answer path. Website runtime added low/balanced/high hardware tiers; `bun run check` passed (130 tests and static build). Continue `MODEL_UPGRADE_PLAN.md`; do not deploy until end-to-end parity/device budgets pass.
+
+## Update 2026-10-26 (v10 browser runtime prototype)
+Canonical source now includes `web/reader_engine.c`, `web/reader.js`, SIMD/scalar WASM build targets, and PyTorch golden scripts. A one-prompt test covers v10 prefix attention, cached next-token decode, tied logits, copy keys and mixed vocabulary/copy probabilities; both WASM builds are within 1.15e-5 max absolute difference. This is only a numerical smoke test, not 50-prompt parity or a website integration. The website still serves v8. Continue its `MODEL_UPGRADE_PLAN.md`; low-power hardware tiers in the site currently cap threads/download concurrency, while v10 bounded-search behavior still needs implementation and a measured quality/latency decision. Do not deploy until the Pyodide/question pipeline, browser parity, memory, and real Chrome phone checks pass.
+
+## 2026-10-26 website release verification
+Kinthread's v8 release/update integrity flow was verified in local Chrome: successful replacement and inference, rejection
+of a same-size corrupted model part while keeping the previous install, and startup blocking on a release-manifest
+mismatch. The notice was checked in dark/light themes; a mobile viewport was not separately tested. Website
+`bun run check` passed (134 tests, lint, static build). The site remains v8 because full v10 grammar/beam + `kinlogic` + exam
+answer parity is not integrated. Details: `~/Web_Dev/kinthread/MODEL_UPGRADE_PLAN.md`. No deploy, commit, or push.
+
+## 2026-10-26 export follow-up
+`export_reader_web.py` ran against `Kinthread-llm-model/runs/v10-r8p-final/best.pt` with `FINAL.json`, `verifier.json`, and `runs/names-v1/name_table.tsv.gz`, writing `/tmp/kinthread-v10-final`. Manifest generated; files are not committed or synced to the site. The site's low-power concurrency changes were deployed with v8 to Cloudflare preview/deployment `https://af2acf01.kinthread.pages.dev`; v10 remains pending full browser pipeline parity.
+
+## 2026-10-26 parity follow-up
+`web/test/make_reader_parity.py` and `test_reader_parity_50.mjs` cover 50 deterministic generated prompts (13–101 tokens, mixed kinds). Both scalar and SIMD C/WASM builds pass against PyTorch: worst errors prefix 2.86e-5, decode 1.38e-5, logits 1.53e-5, copy keys 2.38e-5, mixed probabilities 7.82e-5; log-prob tail 2.27e-4. Still pending JS wrapper, shared beam slots, longer real prompts, full answer pipeline and low-power latency.
+
+Follow-up: the same 50 prompts now pass through `ReaderWasm` JS wrapper (prefill, dynamic KV growth, one cached decode), both SIMD and scalar; maximum log-prob difference 2.27e-4 and probability difference 7.82e-5. This closes wrapper-level primitive coverage only, not beam search or answer output.

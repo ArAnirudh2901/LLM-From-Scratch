@@ -35,7 +35,7 @@ option matching, "not related", "Either X or Y"). Answer-time boosters (`eval/ru
 | pre-v1 + r4 | own English pretraining (TinyStories+FineWeb-Edu), fine-tune | locked test 61.2% |
 | r5 / r6a / r7 | fact grammar growth, STaR, teacher rows, RL tried | r5 locked 62.7%; r7 dev 72.1% (717) |
 | r8 / r8p v5 | dataset v8 balance, prefix-LM option, no-relation | old dev subset: r7 72.9, r8 73.5, r8p 74.3 |
-| final (Oct 25-26) | per-type balanced mix (build_mix), leak guard, verifier + boosters, picked on dev | see `FINAL.json` (Kaggle final run) |
+| final (Oct 25-26) | per-type balanced mix (build_mix), leak guard, verifier + boosters, picked on full dev | r8p + all boosters: dev 73.9% fair / 77.2% verified; locked test 68.8% / 72.2% vs r7 66.2% / 70.5% (+2.6 / +1.7 points) |
 
 ## Data (how to rebuild)
 - Verified pool `data/dataset_v7` (Drive / model repo); extras: rewrites, STaR r2/r3, teacher rows, `pairs_v1`
@@ -58,15 +58,32 @@ option matching, "not related", "Either X or Y"). Answer-time boosters (`eval/ru
 - Kaggle notebooks report "Successful" even when a `!python` cell crashed: always read the log.
 
 ## Infra
-- Kaggle (account anirudharavalli, 30 GPU h/week): r8 notebook `notebookf6d1e34e7f`, r8p `notebook99ae0586bd`
-  (Save & Run All; clone Kinthread-llm-model `v9-reader` HEAD), final selection `colab/final_kaggle.ipynb` (import into
-  notebook `notebookf8798397a0`; inputs: private dataset `kinthread-real-questions`), writes `FINAL.json`.
+- Kaggle (account anirudharavalli): r8 notebook `notebookf6d1e34e7f`, r8p `notebook99ae0586bd`; final selection
+  `notebookf8798397a0`, run `362159765`, completed with `FINAL.json`. Full dev: 748 questions (714 fair, 650 verified);
+  r8p base 73.0% fair / 76.5% verified, r7 72.7% / 76.5%, r8 72.1% / 75.5%. The `all` setting won dev at 73.9% /
+  77.2%. Locked test, scored once after selection: winner 68.8% fair / 72.2% verified; r7 baseline 66.2% / 70.5%.
 - Colab accounts by authuser index (memory `colab-accounts.md`); Gemini keys `~/.config/kinthread/gemini*.env` (10).
 - Repos: LLM-From-Scratch (code), Kinthread-llm-model (code subtree + weights/data), Kinthread (website).
 
-## Website (not yet on the new model; detailed plan: ~/Web_Dev/kinthread/MODEL_UPGRADE_PLAN.md)
-Kinthread (`~/Web_Dev/kinthread`, Cloudflare Pages) still runs the v8 QA model in WASM. To ship the new reader:
-(a) browser: export v10 reader to ONNX fp32 (~160 MB, split < 25 MB parts with SHA manifest as the site already does),
-onnxruntime-web for the grammar-constrained beam, kinlogic (pure Python) via Pyodide or a JS port; or (b) a hosted
-Python API (container/Space) with the Pages site as frontend. Weights: Kaggle output of the final pick -> model repo
-`runs/<final>/best.pt.part-*` (+ verifier.json, FINAL.json). R2 needs billing enabled on the Cloudflare account.
+## Website migration (2026-10-26)
+Kinthread (`~/Web_Dev/kinthread`, Cloudflare Pages) still runs the v8 QA model in WASM. The final pick is v10-r8p,
+step 6,000 (SHA-256 in AGENTS.md). The fixed deployment route remains browser-only: exact fp32 weights served in
+small static parts, custom WASM reader forward pass, and the Python `kinlogic`/reader pipeline in Pyodide. No hosted
+inference service or model compression. The website implementation plan is `~/Web_Dev/kinthread/MODEL_UPGRADE_PLAN.md`.
+
+Started Phase 1 with `export_reader_web.py`: exact fp32 export is 39.50M weights, 158.0 MB raw and 126.1 MB gzip;
+SHA-256 manifest generated. Site resource tiers are implemented and checked: low-power devices use one WASM thread
+and serial downloads; balanced devices cap at two; high-capacity devices at four. `bun run check` passed, 130 tests
+plus static build. Prototype WASM reader (`web/reader_engine.c`, `web/reader.js`) now supports prefix attention,
+cached decoding and the copy head in exact fp32, with independent SIMD/scalar builds. One PyTorch golden prompt
+(8-token prefix, one decode) gave <=1.15e-5 max absolute difference across hidden states, tied logits, copy keys and
+mixed probabilities, both builds. This is not the 50-prompt parity suite; no v10 browser runtime has shipped. Continue
+parity, memory, latency and real Chrome checks before Cloudflare deployment. Constrained devices should use
+worker-based bounded search; high-cost `para=2`/`k=16` is reserved for high tier or explicit deep-check, with the
+quality trade-off visible.
+
+- 2026-10-26: v10 browser-forward prototype extended from one prompt to 50 deterministic generated prompts (13–101 tokens); scalar and SIMD WASM both match PyTorch within 2.86e-5 on prefix/decode/logits/copy-key surfaces and 7.82e-5 on mixture probabilities. This is primitive parity, not end-to-end browser answer parity.
+
+- 2026-10-26 (continued): same 50-prompt fixtures pass through `ReaderWasm` wrapper on SIMD and scalar, including prefill, dynamic cache growth and one-token decode; maximum log-prob difference 2.27e-4 and probability difference 7.82e-5. Grammar-constrained generation remains the next major phase.
+
+- 2026-10-26 (website release verification): Kinthread's local Chrome preview passed success, corrupted-model-file, and mismatched-release-manifest scenarios for its release/update plumbing. The website is still pinned to v8; v10-r8p forward/decode parity does not establish end-to-end answer parity. Website details and the remaining v10 gate are in `~/Web_Dev/kinthread/MODEL_UPGRADE_PLAN.md`.

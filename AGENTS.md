@@ -96,7 +96,8 @@ Python with torch: `.venv/bin/python` in this repo (needs pandas + pyarrow for t
 
 ## Owner's hard rules
 
-- No quantization, no distillation or smaller model: keep the v8 weights and exact fp32; optimise the runtime only.
+- No quantization, no distillation or smaller model: preserve exact fp32 weights for the selected reader (v10-r8p,
+  step 6,000; v8 is the site's current deployed model until browser parity is proven); optimise the runtime only.
 - Weights, checkpoints and data stay git-ignored here; they are published only in Kinthread-llm-model (and the
   exported model in Kinthread).
 - Commit or push only when asked. Default branch `main` (includes the kinship work); `kinship-qa-web` mirrors it.
@@ -159,3 +160,18 @@ Python with torch: `.venv/bin/python` in this repo (needs pandas + pyarrow for t
 - 2026-10-25 afternoon: owner: r8 is final (no r9); no data imbalance, no leakage, every edge case. Audit of the real training mixture found possessive forms 7x over, speech / only / grand / if / married-to / cousin-uncle-nephew answers / 9+ people at about half, nothing over 145 tokens, and one locked-test question (a teacher row from the old crawl) plus 56 near/exact eval copies in the training files. Fixed: `build_mix.py` + `mixture_audit.py` (balanced mix_r8, 190k rows), leak guard in `train_reader` (`eval/leak.py`, fingerprint), no-relation rows. r8 / r8p restarted as Kaggle version 5 (`colab/r8*_kaggle.ipynb`: mix_r8 + rewrites + STaR r3 at 75%, pool 25% restyled). Note r7 and earlier trained on that leaked teacher row: their xcrawl-test scores are slightly optimistic.
 - 2026-10-25 afternoon (later): data balance is now one command with no manual re-check: `python build_mix.py --out data/mix_rN.jsonl.gz --strict` rakes every verified row to real exam shares, fills remaining gaps with new engine-checked rows (construction rewrites, joined questions), drops evaluation copies (leak guard) and exits 2 if any real share of 1%+ is still under 3/4 of its target (manifest `*_manifest.json` lists it). r8 v5 (Kaggle) trains on mix_r8 (guard on at load: 93 extra rows + exact pool copies dropped); the self-filling build (`data/mix_auto*`, local) differs little (effective rows 27.6k vs 18.7k, >170-token questions 0.5% vs 0%) so r8 was not restarted.
 - 2026-10-25 evening: results on Kaggle's old dev subset (573 fair, adaptive+hybrid): r7 72.9%, r8 v5 73.5%, **r8p v5 74.3%** (construction suite r8 v5 374/375 incl. no relation / stranger 15/15). Data: `build_mix.py` now gives every phrase type (45), fact type, named answer (43) and kind a minimum row count (3,000 / 1,500 / 6,000), scarce types pulled from the whole verified pool, gaps filled with verified rewrites/joins; mix_r8 rebuilt (240,566 rows, effective 36,260; 5 targets still at 65-75%: if / married to / 4-person / 81-130 tokens). r8p v6 training on it (Kaggle notebook99ae0586bd). Benchmarks run on Kaggle: private dataset `anirudharavalli/kinthread-real-questions` (full real set incl. keys, 156 KB) + `colab/score_kaggle.ipynb` (notebook notebookf8798397a0: full 717 dev for every attached checkpoint; locked test only for FINAL, once).
+
+- 2026-10-26: full-dev selection completed; v10-r8p step 6,000 won with `all` boosters (dev 73.9% fair / 77.2%
+  verified, locked test 68.8% / 72.2%; test scored once). Added `export_reader_web.py`; export smoke check from the
+  local final checkpoint produced 39.50M exact fp32 weights (158.0 MB raw, 126.1 MB gzip). Website is still on v8;
+  browser inference work and low-power budgets remain before deploying v10. Device-tier resource caps were added in
+  the website repo and `bun run check` passed.
+- 2026-10-26 (continued): added a v10 fp32 WASM reader prototype (`web/reader_engine.c`, `web/reader.js`) with standalone SIMD/scalar builds. One short prompt plus a cached decode matches PyTorch within 1.15e-5 on the prefix, decode, tied logits and pointer-copy outputs. More parity checks and website integration are still required; v8 remains live.
+
+- 2026-10-26 (continued): exported the selected v10-r8p checkpoint with FINAL/verifier/name-table assets to `/tmp/kinthread-v10-final`; its manifest covers all five files. Export summary: 39.50M fp32 weights, 158.0 MB raw, 126.1 MB gzip. Site deployment remains v8; v10 browser inference is unfinished.
+
+- 2026-10-26 (continued): deterministic 50-prompt generated C/WASM parity suite now passes in SIMD and scalar builds (13–101 token prefixes). Worst max error: prefix 2.86e-5, decode 1.38e-5, logits 1.53e-5, copy keys 2.38e-5, mixture probabilities 7.82e-5; log-prob tail 2.27e-4. This still does not cover JS wrapper, shared beam slots, real eval questions, Pyodide or device latency.
+
+- 2026-10-26 (continued): 50-prompt parity also passes through the `ReaderWasm` JS wrapper's prefill, cache-growth and cached-decode path in both builds. Max wrapper log-prob difference `2.27e-4`, probability difference `7.82e-5`. End-to-end grammar beam, Python kinlogic and real-question parity remain open.
+
+- 2026-10-26 (website release verification): Kinthread's v8 release/update flow passed local Chrome checks for success, corrupted-file rejection, and mismatch blocking; styling was checked in light and dark themes. Website `bun run check` passed (134 tests, lint, static build). This does not make v10 releasable: its grammar/beam + `kinlogic` + exam answer path is still not integrated. The active site remains v8. See `~/Web_Dev/kinthread/MODEL_UPGRADE_PLAN.md`; no deploy, commit, or push.
