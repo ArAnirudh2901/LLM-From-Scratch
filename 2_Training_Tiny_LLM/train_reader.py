@@ -430,7 +430,7 @@ def main():
     model.train()
     t0, seen = time.time(), 0
     pad = vocab.stoi['<pad>']
-    from fit_health import diagnose, must_stop
+    from fit_health import diagnose, must_stop, require_finite_loss
     tl_sum, tl_n = 0.0, 0
     held = [e for e in (encode_example(vocab, d['tokens'], d['lf'], cfg['block_size']) for d in dev[:256]) if e]   # fixed: held-out loss
     while step < a.steps:
@@ -448,6 +448,7 @@ def main():
                     with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
                         loss_f, loss_lm = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab)
                         loss = (loss_f + a.lm_weight * loss_lm) / len(parts)
+                    require_finite_loss(loss, step, loss_f, loss_lm)
                     scaler.scale(loss).backward()
                 break
             except RuntimeError as e:   # torch.OutOfMemoryError too: long rows; same batch in more passes
@@ -459,7 +460,7 @@ def main():
                 a.accum *= 2
                 print(f'  out of GPU memory: {a.accum} passes per batch from now on', flush=True)
         scaler.unscale_(opt)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
         scaler.step(opt)
         scaler.update()
         if ema is not None:

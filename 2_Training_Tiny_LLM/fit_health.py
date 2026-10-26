@@ -6,8 +6,22 @@ Each evaluation appends {step, train_loss, heldout_loss, synth, real} to the his
 """
 from __future__ import annotations
 
+import torch
+
 NOISE = 0.02     # real dev of ~300 questions moves about +-2 points between evaluations by chance
 HIGH_LOSS = 0.05  # fact loss (per token) still this high means the reader has not learnt the training data
+
+
+def require_finite_loss(loss, step: int, facts=None, words=None) -> None:
+    """Stop before backpropagating a non-finite scalar loss; report its components for diagnosis."""
+    if torch.isfinite(loss.detach()).all().item():
+        return
+    parts = []
+    for name, value in (("facts", facts), ("words", words)):
+        if value is not None:
+            parts.append(f"{name}={value.detach().float().item():.6g}")
+    detail = f" ({', '.join(parts)})" if parts else ""
+    raise FloatingPointError(f"non-finite training loss at step {step}{detail}")
 
 
 def diagnose(hist: list[dict]) -> list[str]:

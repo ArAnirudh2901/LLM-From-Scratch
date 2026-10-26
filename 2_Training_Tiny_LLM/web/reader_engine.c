@@ -10,7 +10,7 @@ typedef struct {
   float eps, rope_base;
   const float *tok, *lnf, *copy_q, *copy_k, *gate_w, *gate_b;
   ReaderLayer l[MAXL];
-  float *K, *Vv, *x, *xn, *qkv, *att, *h1, *h2, *sc;
+  float *K, *Vv, *x, *xn, *qkv, *att, *h1, *h2, *sc, *rope;
 } Reader;
 
 static void *take_reader(const float **p, size_t n) {
@@ -40,13 +40,12 @@ static void rmsnorm_heads(float *x, int R, int H, int D, const float *w, float e
   }
 }
 
-static void rope_rows(float *x, int R, int H, int D, const int *pos, double base) {
+static void rope_rows(float *x, int R, int H, int D, const int *pos, const float *rope) {
   for (int r = 0; r < R; r++) for (int h = 0; h < H; h++) {
     float *v = x + (size_t)r * H * D + h * D;
+    const float *rotation = rope + (size_t)pos[r] * D;
     for (int i = 0; i < D; i += 2) {
-      double inv = 1.0 / pow(base, (double)i / D);
-      double a = (double)pos[r] * inv;
-      float c = (float)cos(a), s = (float)sin(a), x0 = v[i], x1 = v[i + 1];
+      float c = rotation[i], s = rotation[i + 1], x0 = v[i], x1 = v[i + 1];
       v[i] = x0 * c - x1 * s;
       v[i + 1] = x0 * s + x1 * c;
     }
@@ -55,7 +54,7 @@ static void rope_rows(float *x, int R, int H, int D, const int *pos, double base
 
 Reader *reader_new(const float *weights, int L, int H, int C, int V, int T, int F, int DC, int cap, int rmax,
                    float eps, double rope_base) {
-  if (L < 1 || L > MAXL || H < 1 || C % H || C / H % 4 || F % 4 || DC < 1 || cap < 1 || rmax < 1) return 0;
+  if (L < 1 || L > MAXL || H < 1 || C % H || C / H % 4 || F % 4 || DC < 1 || T < 1 || cap < 1 || rmax < 1) return 0;
   Reader *r = calloc(1, sizeof(Reader));
   if (!r) return 0;
   r->L = L; r->H = H; r->C = C; r->D = C / H; r->V = V; r->T = T; r->F = F; r->DC = DC;
@@ -77,7 +76,16 @@ Reader *reader_new(const float *weights, int L, int H, int C, int V, int T, int 
   r->qkv = malloc(sizeof(float) * (size_t)rmax * 3 * C); r->att = malloc(sizeof(float) * (size_t)rmax * C);
   r->h1 = malloc(sizeof(float) * (size_t)rmax * F); r->h2 = malloc(sizeof(float) * (size_t)rmax * F);
   r->sc = malloc(sizeof(float) * (size_t)cap);
-  if (!(r->K && r->Vv && r->x && r->xn && r->qkv && r->att && r->h1 && r->h2 && r->sc)) return 0;
+  r->rope = malloc(sizeof(float) * (size_t)T * r->D);
+  if (!(r->K && r->Vv && r->x && r->xn && r->qkv && r->att && r->h1 && r->h2 && r->sc && r->rope)) return 0;
+  for (int i = 0; i < r->D; i += 2) {
+    double inv = 1.0 / pow((double)r->rope_base, (double)i / r->D);
+    for (int p = 0; p < T; p++) {
+      double a = (double)p * inv;
+      r->rope[(size_t)p * r->D + i] = (float)cos(a);
+      r->rope[(size_t)p * r->D + i + 1] = (float)sin(a);
+    }
+  }
   Model tune = {0};
   tune.C = C; tune.rmax = 12; tune.xn = r->xn; tune.qkv = r->qkv; tune.l[0].qkv = r->l[0].qkv;
   autotune(&tune);
@@ -99,13 +107,20 @@ int reader_grow(Reader *r, int newcap, int used) {
   return 0;
 }
 
+int reader_set_threads(Reader *r, int n) {
+  return set_threads(n, r->l[0].w1, r->l[0].w2, r->h1, r->xn, r->C, r->F);
+}
+
 // CSR context lists let the caller share prefix and beam-parent KV slots. Every row writes its KV at slot[row].
 int reader_forward(Reader *m, int R, const int *tok, const int *pos, const int *slot,
                    const int *off, const int *ctx, float *out) {
   if (R > m->rmax) return -1;
   const int C = m->C, D = m->D, H = m->H, F = m->F;
   const float scale = 1.0f / sqrtf((float)D);
-  for (int r = 0; r < R; r++) memcpy(m->x + (size_t)r * C, m->tok + (size_t)tok[r] * C, sizeof(float) * C);
+  for (int r = 0; r < R; r++) {
+    if (pos[r] < 0 || pos[r] >= m->T) return -2;
+    memcpy(m->x + (size_t)r * C, m->tok + (size_t)tok[r] * C, sizeof(float) * C);
+  }
   for (int layer = 0; layer < m->L; layer++) {
     ReaderLayer *b = &m->l[layer];
     float *Kl = m->K + (size_t)layer * m->cap * C, *Vl = m->Vv + (size_t)layer * m->cap * C;
@@ -115,8 +130,8 @@ int reader_forward(Reader *m, int R, const int *tok, const int *pos, const int *
       float *q = m->qkv + (size_t)row * 3 * C;
       rmsnorm_heads(q, 1, H, D, b->qn, m->eps);
       rmsnorm_heads(q + C, 1, H, D, b->kn, m->eps);
-      rope_rows(q, 1, H, D, pos + row, m->rope_base);
-      rope_rows(q + C, 1, H, D, pos + row, m->rope_base);
+      rope_rows(q, 1, H, D, pos + row, m->rope);
+      rope_rows(q + C, 1, H, D, pos + row, m->rope);
       memcpy(Kl + (size_t)slot[row] * C, q + C, sizeof(float) * C);
       memcpy(Vl + (size_t)slot[row] * C, q + 2 * C, sizeof(float) * C);
     }

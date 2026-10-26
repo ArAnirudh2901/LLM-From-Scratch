@@ -3,7 +3,8 @@ import { hasSimd } from './kinship.js';
 
 export class ReaderWasm {
   static async load(meta, shuffledWeights, engine = 'auto') {
-    const enginePath = engine === 'simd' ? './reader-simd.mjs' : engine === 'scalar' ? './reader-scalar.mjs'
+    const enginePath = engine === 'mt' ? (hasSimd() ? './reader-simd-mt.mjs' : './reader-scalar-mt.mjs')
+      : engine === 'simd' ? './reader-simd.mjs' : engine === 'scalar' ? './reader-scalar.mjs'
       : hasSimd() ? './reader-simd.mjs' : './reader-scalar.mjs';
     const mod = await import(enginePath).then((m) => m.default());
     const n = meta.floats;
@@ -20,13 +21,54 @@ export class ReaderWasm {
     const ptr = mod._reader_new(weights, c.n_layer, c.n_head, c.n_embd, c.vocab_size, c.block_size,
       meta.hidden_size, meta.d_copy, Math.min(128, c.block_size), c.block_size, meta.rms_eps, meta.rope_base);
     if (!ptr) throw new Error('not enough memory to initialize the exact fp32 reader');
-    return new ReaderWasm(mod, meta, ptr, weights);
+    return new ReaderWasm(mod, meta, ptr, weights, enginePath.includes('reader-simd') ? 'simd' : 'scalar');
   }
 
-  constructor(mod, meta, ptr, weights) {
+  static async loadStream(meta, shuffledStream, engine = 'auto') {
+    const enginePath = engine === 'mt' ? (hasSimd() ? './reader-simd-mt.mjs' : './reader-scalar-mt.mjs')
+      : engine === 'simd' ? './reader-simd.mjs' : engine === 'scalar' ? './reader-scalar.mjs'
+      : hasSimd() ? './reader-simd.mjs' : './reader-scalar.mjs';
+    const mod = await import(enginePath).then((m) => m.default());
+    const n = meta.floats;
+    const weights = mod._malloc(n * 4);
+    if (!weights) throw new Error('not enough memory for the exact fp32 reader weights');
+    const reader = shuffledStream.getReader();
+    let read = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (read + value.length > n * 4) throw new Error('reader weights are larger than expected');
+      const heap = mod.HEAPU8;
+      for (let j = 0; j < value.length;) {
+        const plane = Math.floor(read / n), index = read - plane * n;
+        const run = Math.min(value.length - j, n - index);
+        for (let k = 0; k < run; k++) heap[weights + 4 * (index + k) + plane] = value[j + k];
+        read += run;
+        j += run;
+      }
+    }
+    if (read !== n * 4) throw new Error(`reader weights are truncated (${read} of ${n * 4} bytes)`);
+    const crc = mod._crc32(weights, n * 4, 0) >>> 0;
+    if (crc !== (meta.crc32 >>> 0)) throw new Error(`reader weights CRC mismatch (${crc} != ${meta.crc32})`);
+    const c = meta.config;
+    const ptr = mod._reader_new(weights, c.n_layer, c.n_head, c.n_embd, c.vocab_size, c.block_size,
+      meta.hidden_size, meta.d_copy, Math.min(128, c.block_size), c.block_size, meta.rms_eps, meta.rope_base);
+    if (!ptr) throw new Error('not enough memory to initialize the exact fp32 reader');
+    return new ReaderWasm(mod, meta, ptr, weights, enginePath.includes('reader-simd') ? 'simd' : 'scalar');
+  }
+
+  constructor(mod, meta, ptr, weights, engine) {
     this.mod = mod; this.meta = meta; this.ptr = ptr; this.weights = weights;
+    this.engine = engine;
     this.C = meta.config.n_embd; this.V = meta.config.vocab_size; this.DC = meta.d_copy;
     this.cap = Math.min(128, meta.config.block_size); this.usedSlots = 0;
+  }
+
+  setThreads(maxThreads) {
+    if (typeof this.mod._reader_set_threads !== 'function') return 1;
+    const threads = this.mod._reader_set_threads(this.ptr, Math.max(1, Math.min(16, maxThreads | 0)));
+    if (threads > 1 && !this.engine.endsWith('-mt')) this.engine += '-mt';
+    return threads;
   }
 
   ensureCapacity(need) {
@@ -80,7 +122,7 @@ export class ReaderWasm {
     return states;
   }
 
-  probabilities(state, promptKeys, promptIds) {
+  logProbabilities(state, promptKeys, promptIds) {
     const h = this.alloc(state.hidden), logits = this.alloc(state.logits);
     const keys = this.alloc(promptKeys), ids = this.alloc(Int32Array.from(promptIds));
     const out = this.mod._malloc(this.V * 4);
@@ -101,7 +143,7 @@ export class ReaderWasm {
     const states = this.forward(rows, { lastOnly: true });
     const promptIds = ids.slice(1, -1);
     const promptKeys = Float32Array.from(states.slice(1, -1).flatMap((s) => [...s.key]));
-    const logprobs = this.probabilities(states.at(-1), promptKeys, promptIds);
+    const logprobs = this.logProbabilities(states.at(-1), promptKeys, promptIds);
     return { prefixLength: P, promptIds, promptKeys, logprobs };
   }
 
@@ -109,6 +151,6 @@ export class ReaderWasm {
     const slot = state.prefixLength + generated.length;
     const context = Array.from({ length: slot + 1 }, (_, i) => i);
     const decoded = this.forward([{ token, position: slot, slot, context }], { copyKeys: false })[0];
-    return this.probabilities(decoded, state.promptKeys, state.promptIds);
+    return this.logProbabilities(decoded, state.promptKeys, state.promptIds);
   }
 }

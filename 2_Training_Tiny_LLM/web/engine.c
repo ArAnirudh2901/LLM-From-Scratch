@@ -196,25 +196,25 @@ static void gemm(const float *X, const float *W, const float *b, float *Y, int R
 
 // Start up to n - 1 workers (the caller is thread n), then keep the thread count that runs a typical step fastest
 // (on CPUs with slow efficiency cores fewer threads can win). Returns the count used. scratch: >= 12 * 1536 floats.
-int set_threads(int n, const float *W1, const float *W2, float *X, float *Y) {
+int set_threads(int n, const float *W1, const float *W2, float *X, float *Y, int C, int F) {
   if (n > 16) n = 16;
   for (; nthreads < n; nthreads++) {
     pthread_t t;
     if (pthread_create(&t, 0, worker, (void *)(intptr_t)nthreads) != 0) break;
     pthread_detach(t);
   }
-  for (int i = 0; i < 12 * 1536; i++) X[i] = (float)((i * 7919) % 101) / 101.0f - 0.5f;
+  for (int i = 0; i < 12 * F; i++) X[i] = (float)((i * 7919) % 101) / 101.0f - 0.5f;
   double best = 1e30;
   int pick = 1;
   active = nthreads;
-  for (int rep = 0; rep < 20; rep++) gemm(X, W1, 0, Y, 12, 1536, 384);   // warm up threads and CPU clocks
+  for (int rep = 0; rep < 20; rep++) gemm(X, W1, 0, Y, 12, F, C);   // warm up threads and CPU clocks
   for (int a = 1; a <= nthreads; a++) {
     active = a;
     double lo = 1e30;
     for (int rep = 0; rep < 13; rep++) {
       double t0 = emscripten_get_now();
-      gemm(X, W1, 0, Y, 12, 1536, 384);   // fc1-sized and fc2-sized products
-      gemm(Y, W2, 0, X, 12, 384, 1536);
+      gemm(X, W1, 0, Y, 12, F, C);   // fc1-sized and fc2-sized products
+      gemm(Y, W2, 0, X, 12, C, F);
       double dt = emscripten_get_now() - t0;
       if (rep >= 3 && dt < lo) lo = dt;
     }
@@ -241,7 +241,9 @@ static void gemm(const float *X, const float *W, const float *b, float *Y, int R
   while (atomic_load(&busy) > 0) {}   // workers finish their last chunk
 }
 #else
-int set_threads(int n, const float *W1, const float *W2, float *X, float *Y) { (void)n; (void)W1; (void)W2; (void)X; (void)Y; return 1; }
+int set_threads(int n, const float *W1, const float *W2, float *X, float *Y, int C, int F) {
+  (void)n; (void)W1; (void)W2; (void)X; (void)Y; (void)C; (void)F; return 1;
+}
 static void gemm(const float *X, const float *W, const float *b, float *Y, int R, int N, int K) {
   gemm_cols(X, W, b, Y, R, N, K, 0, N);
 }
@@ -441,7 +443,7 @@ unsigned crc32(const unsigned char *p, unsigned n, unsigned crc) {
 }
 
 int model_set_threads(Model *m, int n) {   // tune threads on this model's own first-layer FFN weights
-  return set_threads(n, m->l[0].fc1, m->l[0].fc2, m->h1, m->xn);
+  return set_threads(n, m->l[0].fc1, m->l[0].fc2, m->h1, m->xn, m->C, 4 * m->C);
 }
 
 // Grow the KV slot pool to newcap slots, keeping the first `used` slots. Returns 0, or -1 when out of memory.
