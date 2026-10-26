@@ -38,3 +38,9 @@ use the private bundle `~/kinthread_handoff.tgz` (memory, Gemini keys, real ques
 ## Current status (2026-10-27)
 
 RoPE precomputation and SIMD/scalar pthread v10 reader builds are now in canonical `web/`; the model-repo mirror contains the same source and binaries. The website only selects threaded WASM on isolated devices reporting at least 8 GB and uses single-thread WASM on low/unknown-memory profiles. The pthread build reserves 384 MiB after smaller builds exhausted KV slots during branching beam search. 50-prompt JS-wrapper parity passes. The website now has a passing Node/Pyodide end-to-end three-link answer regression and a local Chrome smoke check returning paternal cousin in `9,632 ms` with SIMD/two threads; the score is tentative and uncalibrated. This is not full parity. The site stays on production v8; locked test remains 68.8% fair / 72.2% verified (<85%). Do not deploy, commit, or push until the documented browser parity and device gates pass.
+
+## 2026-10-27 — v10-r8p production publication
+
+Owner-authorized deployment supersedes the prior “keep production on v8” status. The exact fp32 v10-r8p checkpoint is active on Cloudflare Pages. Canonical source commit 11508ba is pushed to main; model mirror merge 57455fc and website commit 6f32924 are pushed as well. Production manifest identity: checkpoint SHA-256 38c289d351d6517b5cde1bc9fb64ea97bd33eee193639d6351edda52fdfd7a52, content c4a1d87737c6, runtime f608eed15e9b. Live verification matched 66 model assets and 20 runtime files by byte count and SHA-256.
+
+Accuracy remains 68.8% fair / 72.2% verified on the locked test, below 85%; broad browser parity, calibration, and mobile/low-memory budgets remain unfinished. The Chrome three-link answer is one tentative smoke check only.
