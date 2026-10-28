@@ -111,7 +111,7 @@ OPEN = [   # (regex, groups): who is pointed at / introduced (target), who speak
     (rf'^(?:if )?{HEAD_}({E}) (?:introduces|introduced|introducing) {HEAD_}({E})(?: to (?:his|her|my) \w+)?(?: ,)? (?:by saying|saying|and says|and said|says|said)(?: ,)? ["\'] (.+?)(?: [.,])* ["\'] (?:, )?(.+)$', ('sh', 's', 'th', 't')),
     (rf'^{HEAD_}({E}) (?:points|pointed|pointing) (?:to|at|towards) {HEAD_}({E}) (?:and|,) (?:says|said)(?: ,)? ["\'] (.+?)(?: [.,])* ["\'] (?:, )?(.+)$', ('sh', 's', 'th', 't')),
     (rf'^(?:if )?{HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))?(?: ,| :| -)? ["\'] (.+?)(?: [.,])* ["\'] (?:, )?(.+)$', ('sh', 's', 'ah', 'a')),
-    (rf'^(?:pointing (?:out )?(?:to|towards|at)|looking at|introducing)(?: (.*?))? , {HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))? (?:that |, )((?:he|she|his|her|my|i|this|that) .+?) \. (.+)$', ('tdesc', 'sh', 's', 'ah', 'a')),
+    (rf'^(?:pointing (?:out )?(?:to|towards|at)|looking at|introducing)(?: (.*?))? , {HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))? (?:that |, )((?:{E}|he|she|his|her|my|i|this|that) .+?) \. (.+)$', ('tdesc', 'sh', 's', 'ah', 'a')),
 ]
 OPEN.append((rf'^(?:if )?{HEAD_}({E}) {SAY}(?: (?:to )?{HEAD_}({E}))? that (.+?) \. (.+)$', ('sh', 's', 'ah', 'a')))   # reported speech
 NARRATED = rf'^(?:if )?{HEAD_}({E}) (?:introduces|introduced) {HEAD_}({E}) as (?:he is |she is )?(.+?) \. (.+)$'   # his/her: the speaker

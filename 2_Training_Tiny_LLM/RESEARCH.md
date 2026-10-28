@@ -80,3 +80,20 @@ with training data in that wording. Ranked by evidence for our setting:
 6. Test-time training (Akyürek et al. ICML 2025 for ARC; TTT-NN, ICLR 2024): per-question fine-tuning; too heavy for
    the browser, possible offline.
 Architecture (pre-v3: more heads, partial RoPE, AttnRes): expected 0-2 points; the bottleneck is wording coverage.
+
+## 2026-10-28 update: current evidence and next experiments to evaluate
+
+The current selected reader is v10-r8p (step 6,000; exact checkpoint SHA-256 `38c289d351d6517b5cde1bc9fb64ea97bd33eee193639d6351edda52fdfd7a52`). Its official locked real-exam result is 68.8% fair / 72.2% verified, below the 85% goal. The 99.57% generated score is not project-blind (v10-r3 was scored on the same generated set) and is not evidence of 99.57% real-world accuracy. Past 340 reworded examples, answer agreement was 329/340 (96.8%) while exact fact parsing was 258/340 (75.9%): answer-only metrics can hide reader errors.
+
+The newest data work deliberately produced two non-interchangeable pools: (a) a deterministic, exact-engine-verified 3,750-row set equally divided among direct speech, indirect speech, and long stories, with 50 examples in each of 25 canonical answer buckets per format; (b) a Gemini rewrite pool with 1,015 accepted from 2,069 attempts (49.1%) and a 204-row focus subset, produced using 275 requests paced at 8 seconds. Pool (b) is not answer- or format-balanced and contains a long tail of rare/deep relation labels. Neither pool was used to train the selected model.
+
+A fixed 15-story diagnostic scored 5/15 at the current 96-token generation cap and 12/15 when only the Python diagnostic cap was raised to 192; all prefixes fit under the current 320-token allowance. This points to a potentially important decoding-budget contribution but does not rule out fact-reading, decoder stopping, grammar constraints, or data difficulty. Three errors remain even at 192.
+
+For Claude's improvement brainstorm, compare these concrete hypotheses before choosing a training method:
+
+1. **Output budget / stop behavior:** on a larger stratified long-story dev set, record generated length, stop reason, parse validity, exact fact recall/precision, and final-answer match at both caps. Determine whether 192 is merely letting the reader finish its structured output or admitting more hallucinated facts.
+2. **Reader vs. solver attribution:** score exact parsed fact graphs separately from the final engine answer; then run an oracle-reader/engine check on these same rows. This isolates text-to-fact extraction from graph/answer logic.
+3. **Candidate-data quality:** inspect relation depth, exact labels, names, question structure, near-duplicates and evaluation overlap in each pool. The deterministic set balances canonical relation buckets but exact side-specific surface labels vary; the Gemini set is filtered but unbalanced.
+4. **Training value:** only after (1)–(3), use a small controlled fine-tune on a copied checkpoint and one data/recipe change at a time, with a fixed development suite spanning real exam wording, speech, stories, relation types, and lengths. Preserve all current weights and compare the same examples before/after.
+
+No architecture or training recipe can guarantee perfect accuracy. More examples, a larger output cap, extra reasoning steps, voting, or another optimizer should not be assumed to help without controlled, category-level development measurements. Do not inspect/tune against the locked test; no new locked-test result is authorized by this handoff.

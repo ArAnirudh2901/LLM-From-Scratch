@@ -720,7 +720,9 @@ SPEECH_OPEN = [
 ]
 
 
-def q_speech(rng) -> dict | None:
+def q_speech(rng, speech_mode: str | None = None) -> dict | None:
+    if speech_mode not in (None, 'direct', 'indirect'):
+        raise ValueError("speech_mode must be 'direct', 'indirect', or None")
     """Pointing / introducing / photograph questions: the speaker's "my", the person's "he/his"."""
     fam = _family(rng, 5, 12)
     pair = pick_pair(rng, fam, 1, 5)
@@ -728,14 +730,14 @@ def q_speech(rng) -> dict | None:
         return None
     s, p = pair
     q = Q(rng, fam, style=rng.choices(['indian', 'world', 'mixed'], [70, 15, 15])[0])
-    kinds = (rng.random() < 0.3, rng.random() < 0.65)
+    kinds = (rng.random() < 0.3, rng.random() < 0.65) if speech_mode is None else (False, False)
     if all(kinds):
         rs, rp = q.two_descs(s, p)
     else:
         rs = q.desc(s) if kinds[0] else q.ref(s)
         rp = q.desc(p) if kinds[1] else q.ref(p)
     he, him, his = PRON[fam.g(p)]
-    addressee = rng.random() < 0.2   # the speaker talks to the person: "you", "your"
+    addressee = (rng.random() < 0.2) if speech_mode is None else False   # forced forms share one underlying example
     if addressee:
         he, his = 'you', 'your'
     elif rp.kind == 'desc' and rng.random() < 0.25:
@@ -770,17 +772,28 @@ def q_speech(rng) -> dict | None:
         if not addressee and not his.startswith('this'):
             ev.append(rp)
     open_ = rng.choice(SPEECH_OPEN)
-    reported = not addressee and rng.random() < 0.1   # "Pointing to the man, Rita said that his wife is ..." / "said: ..."
+    if speech_mode == 'direct':
+        open_ = rng.choice(['Pointing to {P}, {S} said, {U}', 'Introducing {P}, {S} said, {U}'])
+    elif speech_mode == 'indirect':
+        open_ = rng.choice(['Pointing to {P}, {S} said that {U}', 'Introducing {P}, {S} said that {U}'])
+    reported = speech_mode == 'indirect' or (
+        speech_mode is None and not addressee and rng.random() < 0.1
+    )   # "Pointing to the man, Rita said that his wife is ..."
     if reported:
-        open_ = rng.choice(['Pointing to {P}, {S} said that {U}', 'Pointing to {P}, {S} said: {U}', 'Pointing to {P}, {S} said - {U}',
-                            'Introducing {P}, {S} said that {U}'])
+        if speech_mode is None:
+            open_ = rng.choice(['Pointing to {P}, {S} said that {U}', 'Introducing {P}, {S} said that {U}'])
         if 'that' in open_:
             quote = ('', '')
             utter = utter[0].lower() + utter[1:] if not utter.startswith('I ') else utter
+    if speech_mode == 'indirect':
+        # Shift first-person references into grammatical reported speech while keeping the same graph anchors:
+        # “I am ... of my father” -> “Ravi is ... of Ravi's father”. The exact reader resolves the explicit name.
+        utter = re.sub(r'\bI am\b', f'{rs.surface} is', utter, flags=re.I)
+        utter = re.sub(r'\bmy\b', poss(rs.surface), utter, flags=re.I)
     if addressee:
         open_ = rng.choice(['{S} said to {P}, {U}', '{S} told {P}, {U}', 'Looking at {P}, {S} said, {U}'])
     side = []   # someone the speaker talks to or introduces to: "said to her husband"
-    if not addressee and rng.random() < 0.2:
+    if speech_mode is None and not addressee and rng.random() < 0.2:
         _, _, sh = PRON[fam.g(s)]
         rel = [(m, mv) for m in fam.people if m not in (s, p) and len(mv := fam.hops(s, m)) == 1 and mv[0][0] in ('S', 'D', 'U')]
         if rel and rng.random() < 0.7:
@@ -798,7 +811,7 @@ def q_speech(rng) -> dict | None:
             side = []
         if side:
             q.gendered.discard(rs)
-    bare_photo = rp.kind == 'desc' and not addressee and not side and rng.random() < 0.2
+    bare_photo = speech_mode is None and rp.kind == 'desc' and not addressee and not side and rng.random() < 0.2
     if bare_photo:   # the person is first named in the question: "the man in the photograph"
         open_ = rng.choice(['Pointing to a photograph, {S} said, {U}', 'Looking at a photograph, {S} said, {U}',
                             'Showing a photograph to a friend, {S} said, {U}'])
@@ -813,6 +826,13 @@ def q_speech(rng) -> dict | None:
         ev = sorted(set(ev), key=order.index)
     sentence = open_.format(P=said.get(rp, rp.surface), S=said.get(rs, rs.surface), U=quote[0] + utter + quote[1])
     q.add(cap(sentence), side + (facts if not bare_photo else []), evidence=ev)
+    if speech_mode is not None:
+        # A named speaker's sex is not established by a name or by saying "my sister". State it explicitly when
+        # the speech facts do not already do so; otherwise source-graph labels can overstate what the text entails.
+        for r in (rs, rp):
+            if not implied(q, r):
+                noun = 'man' if r.g == 'M' else 'woman'
+                q.add(f'{r.surface} is a {noun}.', [G(r, r.g)])
     if bare_photo:
         ref_p = q.say(rp, definite=True) + ' in the photograph'
     else:
@@ -824,19 +844,41 @@ def q_speech(rng) -> dict | None:
         q.facts += [G(rp, rp.g)] + facts
         q.gendered.add(rp)
     near = [m for m in fam.people if m not in (s, p) and len(fam.hops(s, m)) == 1 and m not in q.refs]
-    if near and not bare_photo and rng.random() < 0.15:   # "How is Tanya's husband related to the man?"
+    if speech_mode is None and near and not bare_photo and rng.random() < 0.15:   # "How is Tanya's husband related to the man?"
         m = rng.choice(near)
         mv = tuple(h for h, _ in fam.hops(s, m))
         word = word_for(mv, fam.g(m))
         rm = q.anon(m)
         q.add(ask_text(rng, ref_p, f"{poss(ref_s)} {word}"), [F(rs, word, rm), {'t': 'ask', 'x': rp, 'y': rm}])
         t = fam.truth(p, m)
+    elif speech_mode is not None:
+        if rng.random() < 0.5:
+            q.add(f'How is {ref_p} related to {ref_s}?', [{'t': 'ask', 'x': rs, 'y': rp}])
+            t = fam.truth(s, p)
+        else:
+            q.add(f'How is {ref_s} related to {ref_p}?', [{'t': 'ask', 'x': rp, 'y': rs}])
+            t = fam.truth(p, s)
     elif rng.random() < 0.65:
         q.add(ask_text(rng, ref_s, ref_p), [{'t': 'ask', 'x': rs, 'y': rp}])
         t = fam.truth(s, p)
     else:
         q.add(ask_text(rng, ref_p, ref_s), [{'t': 'ask', 'x': rp, 'y': rs}])
         t = fam.truth(p, s)
+    if speech_mode is not None:
+        choices = options_for(rng, t['label'])
+        pool = ['Brother', 'Sister', 'Father', 'Mother', 'Son', 'Daughter', 'Uncle', 'Aunt', 'Nephew', 'Niece',
+                'Cousin', 'Grandfather', 'Grandmother', 'Grandson', 'Granddaughter', 'Husband', 'Wife',
+                'Father-in-law', 'Mother-in-law', 'Brother-in-law', 'Sister-in-law', 'Son-in-law', 'Daughter-in-law',
+                'Maternal uncle', 'Paternal uncle', 'None of the above']
+        while len(choices) < 5:
+            option = rng.choice(pool)
+            if option not in choices:
+                choices.append(option)
+        ex = q.finish('speech', choices[:5], {'truth': t['key']}, noise=False)
+        if ex is not None:
+            ex['speech_form'] = speech_mode
+            ex['relation_label'] = t['label']
+        return ex
     return q.finish('speech', options_for(rng, t['label']) if rng.random() < 0.4 else None, {'truth': t['key']})
 
 

@@ -34,6 +34,7 @@ from .prepare import prepare
 REWRITE = """Rewrite this blood-relation reasoning question as it might appear in a different competitive exam
 (bank PO, SSC, CAT, UPSC CSAT). Change the wording and sentence structure freely, but:
 - keep every person's name or letter exactly as written: each one must appear in your version,
+- use each question's explicit Required names and letters list; every listed item must occur verbatim,
 - keep every relation word exactly (never replace 'son' with 'child' or 'mother' with 'parent'),
 - keep every family relationship and every stated gender exactly (no new facts, none dropped; keep sentences like
   "X is a woman" or pronouns that show a gender),
@@ -70,16 +71,33 @@ def _post(url, body, headers, timeout=90):
         return json.loads(r.read())
 
 
-def call(prompt: str, provider: str, temperature: float = 0.9, json_out: bool = False, model: str | None = None) -> str:
+_LAST_GEMINI_REQUEST_AT = 0.0
+GEMINI_API_REQUESTS = 0
+
+
+def call(prompt: str, provider: str, temperature: float = 0.9, json_out: bool = False, model: str | None = None,
+         response_schema: dict | None = None, thinking_level: str = 'minimal') -> str:
+    global _LAST_GEMINI_REQUEST_AT, GEMINI_API_REQUESTS
     if provider == 'gemini':
+        interval = max(0.0, float(os.environ.get('REWORD_GEMINI_MIN_INTERVAL', '8')))
+        now = time.monotonic()
+        wait = _LAST_GEMINI_REQUEST_AT + interval - now
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_GEMINI_REQUEST_AT = time.monotonic()
+        GEMINI_API_REQUESTS += 1
         key = os.environ['GEMINI_API_KEY']
         model = model or os.environ.get('REWORD_GEMINI_MODEL', 'gemini-3.5-flash-lite')   # ~1 s a call; 3.x flash thinks for ~30 s
-        cfg = {'temperature': temperature, 'thinkingConfig': {'thinkingLevel': 'minimal'},
-               **({'responseMimeType': 'application/json'} if json_out else {})}
+        cfg = {'temperature': temperature, 'thinkingConfig': {'thinkingLevel': thinking_level},
+               **({'responseMimeType': 'application/json'} if json_out else {}),
+               **({'responseSchema': response_schema} if json_out and response_schema else {})}
         r = _post(f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
                   {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': cfg},
                   {'x-goog-api-key': key})
-        return r['candidates'][0]['content']['parts'][0]['text'].strip()
+        parts = r['candidates'][0]['content'].get('parts', [])
+        # Do not expose optional thought summaries to JSON/text parsers. Joining all answer text parts also
+        # handles a response split across multiple text chunks instead of silently keeping only part zero.
+        return ''.join(p.get('text', '') for p in parts if isinstance(p, dict) and p.get('text') and not p.get('thought')).strip()
     key = os.environ['ANTHROPIC_API_KEY']
     model = os.environ.get('REWORD_CLAUDE_MODEL', 'claude-haiku-5-5')
     r = _post('https://api.anthropic.com/v1/messages',
@@ -146,7 +164,15 @@ def placer(ents):
 def needed(ex) -> list[str]:
     """Names and letters of the people in the original's facts (filler sentences may be dropped by a rewrite)."""
     ids = set(re.findall(r'@\d+', ex['lf']))
-    return [e['text'] for e in prepare(ex['text'])['ents'] if e['id'] in ids and e['kind'] in ('name', 'letter')]
+    names = ex.get('names') or {}
+    parsed = {e['id']: e for e in prepare(ex['text'])['ents']}
+    out = []
+    for pid in sorted(ids):
+        entity = parsed.get(pid)
+        name = names.get(pid) or (entity['text'] if entity else None)
+        if name and (entity is None or entity['kind'] in ('name', 'letter')):
+            out.append(name)
+    return out
 
 
 def to_facts(extracted: dict, ents: list[dict]) -> str | None:
@@ -156,10 +182,14 @@ def to_facts(extracted: dict, ents: list[dict]) -> str | None:
     out = []
     for f in extracted.get('facts', []):   # "person is the R of Y" -> fact "Y R person"
         x, y, r = f.get('person'), f.get('of'), str(f.get('is_the', '')).strip().lower()
+        side = None
+        side_match = re.fullmatch(r'(maternal|paternal)\s+(.+)', r)
+        if side_match:
+            side, r = side_match.group(1), side_match.group(2)
         r = r if r in KIN else r.replace(' ', '-')
         if r not in KIN or place(x) is None or place(y) is None:
             return None
-        out.append(f'{place(y)} {r} {place(x)}')
+        out.append(f'{place(y)} {side + " " if side else ""}{r} {place(x)}')
     for g in extracted.get('genders', []):
         if place(g.get('person')) is None or g.get('gender') not in ('male', 'female'):
             return None
@@ -214,8 +244,14 @@ def same_meaning(original: dict, lf: str, ents) -> bool:
 REWRITE_BATCH = """Rewrite each numbered blood-relation question below as it might appear in a different competitive exam
 (bank PO, SSC, CAT, UPSC CSAT). For each one, change the wording and sentence structure freely, but:
 - keep every person's name or letter exactly as written: each one must appear in your version,
+- use each question's explicit Required names and letters list; every listed item must occur verbatim,
 - keep every relation word exactly (never replace 'son' with 'child' or 'mother' with 'parent'),
 - keep every family relationship and every stated gender (sentences like "X is a woman", pronouns),
+- preserve the direction of every relationship, who is speaking/to whom, every pronoun referent, and each unnamed person's head noun,
+- preserve any condition, quantifier, or negation exactly; do not simplify or silently resolve it,
+- keep each family-fact clause nearly verbatim; vary transitions and exam framing first, and rewrite a relation clause only when its direction and meaning remain explicit,
+- when a verified fact graph is supplied, treat it as authoritative: `X's relation is Y` means Y is related to X; preserve every fact and exact asked-for pair,
+- `unnamed person #n` labels in the fact graph identify anonymous people; do not copy these labels into the rewrite—retain the source's natural description instead,
 - keep the final question asking about the same two people; no answer options, no answer,
 - plain text only: no LaTeX, markdown or bullet points.
 Return JSON only: {{"rewrites": ["rewrite of question 1", "rewrite of question 2", ...]}} with exactly {n} items in order.
@@ -230,6 +266,13 @@ Write each fact as the text states it ("X is the son of Y" -> person X, is_the s
 is_the daughter, of Y), keeping the exact relation word. List a gender whenever the text shows it (he/she, his/her, a man,
 a woman): "Vani and her son Irfan" -> Vani female. Use "#1", "#2" for people the text mentions without a name; facts of one
 question never mention people of another. Relation words allowed: {words}. Use names exactly as written.
+
+Direction examples: "Hope's husband is Albert" -> person Albert, is_the husband, of Hope. "Irfan is Sonam's son" ->
+person Irfan, is_the son, of Sonam. "The father of P is Q" -> person Q, is_the father, of P. "P has a wife named R" ->
+person R, is_the wife, of P. For "P is the maternal aunt of R", use is_the "maternal aunt"; do not reverse P and R.
+For "How is B related to A?", ask how_is B and related_to A. Never guess gender from a person's name or from a kinship
+title; record gender only when the text explicitly uses a pronoun or a gender word. The kinship title itself carries its
+own gender information.
 
 {questions}"""
 
@@ -251,43 +294,145 @@ STYLES = [   # one per batch with --styles: many surface forms per meaning (Sapa
 ]
 
 
-def reword_batch(exs: list[dict], provider: str, style: str | None = None) -> list[dict | None]:
-    """Rewrites and readings for several questions in two requests; the same checks as reword_one for each."""
-    prompt = REWRITE_BATCH.format(n=len(exs), questions=_numbered([e['text'] for e in exs]))
+def reword_batch(exs: list[dict], provider: str, style: str | None = None, *,
+                 temperature: float | None = None, stats: dict | None = None,
+                 references: list[str] | None = None) -> list[dict | None]:
+    """Rewrites and readings for several questions in two requests; the same checks as reword_one for each.
+
+    Optional stats records a rejection reason per input, allowing dataset-generation runs to measure where
+    examples fail without weakening any of the semantic checks. temperature lets constrained generation keep
+    stylistic variation while reducing fact drift.
+    """
+    reasons = ['rewrite-output-invalid'] * len(exs)
+    request_start = GEMINI_API_REQUESTS
+
+    def finish(rows):
+        if stats is not None:
+            stats['api_calls'] = GEMINI_API_REQUESTS - request_start
+        return rows
+
+    if stats is not None:
+        stats.clear()
+    if references and len(references) == len(exs):
+        questions = '\n\n'.join(
+            f"Question {i + 1}:\nRequired names and letters: {', '.join(needed(ex))}\n"
+            f"Original text: {ex['text']}\nVerified fact graph:\n{references[i]}"
+            for i, ex in enumerate(exs))
+    else:
+        questions = '\n\n'.join(
+            f"Question {i + 1}:\nRequired names and letters: {', '.join(needed(ex))}\nOriginal text: {ex['text']}"
+            for i, ex in enumerate(exs))
+    prompt = REWRITE_BATCH.format(n=len(exs), questions=questions)
     if style:
         prompt = prompt.replace('Return JSON only:', f'Write every rewrite {style}.\nReturn JSON only:', 1)
-    raw = call(prompt, provider, temperature=0.9 if style else 0.7, json_out=True)
+    rewrite_schema = {
+        'type': 'OBJECT', 'properties': {
+            'rewrites': {'type': 'ARRAY', 'items': {'type': 'STRING'}, 'minItems': len(exs), 'maxItems': len(exs)}
+        }, 'required': ['rewrites'], 'propertyOrdering': ['rewrites']
+    }
+    raw = call(prompt, provider, temperature=temperature if temperature is not None else (0.9 if style else 0.7),
+               json_out=True, response_schema=rewrite_schema if provider == 'gemini' else None,
+               thinking_level='low' if provider == 'gemini' else 'minimal')
     try:
         news = [clean(str(t)) for t in json.loads(re.search(r'\{.*\}', raw, re.S).group(0))['rewrites']]
     except (AttributeError, ValueError, KeyError, TypeError):
-        return [None] * len(exs)
+        if stats is not None:
+            stats['reasons'] = reasons
+            stats['rewrite_texts'] = []
+            stats['extracted_lfs'] = [None] * len(exs)
+        return finish([None] * len(exs))
+    extracted_lfs = [None] * len(exs)
+    extracted_readings = [None] * len(exs)
+    if stats is not None:
+        stats['rewrite_texts'] = news
+        stats['extracted_lfs'] = extracted_lfs
+        stats['extracted_readings'] = extracted_readings
     if len(news) != len(exs):
-        return [None] * len(exs)
+        if stats is not None:
+            stats['reasons'] = ['rewrite-count-mismatch'] * len(exs)
+        return finish([None] * len(exs))
     keep = [i for i, (ex, new) in enumerate(zip(exs, news))
             if new and all(n.lower() in new.lower() for n in needed(ex)) and not re.search(r'\\[a-z]+|\$[A-Za-z]|\*\*|^\s*[-*] ', new, re.M)]
+    keep_set = set(keep)
+    for i in range(len(exs)):
+        if i in keep_set:
+            reasons[i] = 'fact-extraction-invalid'
+        else:
+            reasons[i] = 'rewrite-missing-required-name-or-format'
     out = [None] * len(exs)
     if not keep:
-        return out
+        if stats is not None:
+            stats['reasons'] = reasons
+        return finish(out)
+    fact_obj = {'type': 'OBJECT', 'properties': {
+        'person': {'type': 'STRING'}, 'is_the': {'type': 'STRING'}, 'of': {'type': 'STRING'}
+    }, 'required': ['person', 'is_the', 'of'], 'propertyOrdering': ['person', 'is_the', 'of']}
+    gender_obj = {'type': 'OBJECT', 'properties': {
+        'person': {'type': 'STRING'}, 'gender': {'type': 'STRING', 'enum': ['male', 'female']}
+    }, 'required': ['person', 'gender'], 'propertyOrdering': ['person', 'gender']}
+    ask_obj = {'type': 'OBJECT', 'properties': {
+        'how_is': {'type': 'STRING'}, 'related_to': {'type': 'STRING'}
+    }, 'required': ['how_is', 'related_to'], 'propertyOrdering': ['how_is', 'related_to']}
+    reading_obj = {'type': 'OBJECT', 'properties': {
+        'facts': {'type': 'ARRAY', 'items': fact_obj},
+        'genders': {'type': 'ARRAY', 'items': gender_obj},
+        'ask': ask_obj,
+    }, 'required': ['facts', 'genders', 'ask'], 'propertyOrdering': ['facts', 'genders', 'ask']}
+    extract_schema = {'type': 'OBJECT', 'properties': {
+        'readings': {'type': 'ARRAY', 'items': reading_obj, 'minItems': len(keep), 'maxItems': len(keep)}
+    }, 'required': ['readings'], 'propertyOrdering': ['readings']}
     raw = call(EXTRACT_BATCH.format(n=len(keep), words=', '.join(sorted(KIN)), questions=_numbered([news[i] for i in keep])),
-               provider, temperature=0.0, json_out=True,
-               model=os.environ.get('REWORD_EXTRACT_MODEL', 'gemini-flash-lite-latest') if provider == 'gemini' else None)
+               provider, temperature=0.0, json_out=True, response_schema=extract_schema if provider == 'gemini' else None,
+               model=os.environ.get('REWORD_EXTRACT_MODEL', os.environ.get('REWORD_GEMINI_MODEL', 'gemini-3.5-flash-lite'))
+               if provider == 'gemini' else None, thinking_level='low' if provider == 'gemini' else 'minimal')
+    match = re.search(r'\{.*\}', raw, re.S)
     try:
-        readings = json.loads(re.search(r'\{.*\}', raw, re.S).group(0))['readings']
-    except (AttributeError, ValueError, KeyError, TypeError):
-        return out
+        if not match:
+            raise ValueError('no_json_object')
+        parsed = json.loads(match.group(0))
+        if not isinstance(parsed, dict) or 'readings' not in parsed:
+            raise KeyError('missing_readings')
+        readings = parsed['readings']
+        if not isinstance(readings, list):
+            raise TypeError('readings_not_list')
+    except (ValueError, KeyError, TypeError) as exc:
+        for i in keep:
+            reasons[i] = 'fact-extraction-unparsed'
+        if stats is not None:
+            stats['reasons'] = reasons
+            stats['extract_parse_error'] = f'{type(exc).__name__}:{str(exc)[:80]}'
+        return finish(out)
     if len(readings) != len(keep):
-        return out
+        for i in keep:
+            reasons[i] = 'fact-extraction-count-mismatch'
+        if stats is not None:
+            stats['reasons'] = reasons
+        return finish(out)
     for i, reading in zip(keep, readings):
+        extracted_readings[i] = reading
         ex, new = exs[i], news[i]
         p = prepare(new)
         try:
             lf = to_facts(reading, p['ents'])
         except (ValueError, TypeError, AttributeError):
+            reasons[i] = 'fact-mapping-failed'
             continue
-        if lf and accept(lf, ex['truth'], p['tokens']) and same_meaning(ex, lf, p['ents']):
-            out[i] = {'kind': 'reworded-' + ex['kind'], 'text': new, 'tokens': p['tokens'], 'lf': lf, 'truth': ex['truth'],
-                      'depth': ex.get('depth'), 'source': hashlib.sha1(ex['text'].encode()).hexdigest()}
-    return out
+        if not lf:
+            reasons[i] = 'fact-mapping-failed'
+            continue
+        extracted_lfs[i] = lf
+        if not accept(lf, ex['truth'], p['tokens']):
+            reasons[i] = 'answer-mismatch'
+            continue
+        if not same_meaning(ex, lf, p['ents']):
+            reasons[i] = 'fact-graph-mismatch'
+            continue
+        out[i] = {'kind': 'reworded-' + ex['kind'], 'text': new, 'tokens': p['tokens'], 'lf': lf, 'truth': ex['truth'],
+                  'depth': ex.get('depth'), 'source': hashlib.sha1(ex['text'].encode()).hexdigest()}
+        reasons[i] = 'accepted'
+    if stats is not None:
+        stats['reasons'] = reasons
+    return finish(out)
 
 
 def reword_one(ex: dict, provider: str) -> dict | None:
@@ -297,7 +442,8 @@ def reword_one(ex: dict, provider: str) -> dict | None:
         return None
     p = prepare(new)
     raw = call(EXTRACT.format(q=new, words=', '.join(sorted(KIN))), provider, temperature=0.0, json_out=True,   # a faithful reading
-               model=os.environ.get('REWORD_EXTRACT_MODEL', 'gemini-flash-lite-latest') if provider == 'gemini' else None)   # its own free quota
+               model=os.environ.get('REWORD_EXTRACT_MODEL', os.environ.get('REWORD_GEMINI_MODEL', 'gemini-3.5-flash-lite'))
+               if provider == 'gemini' else None)   # the same configured model unless explicitly overridden
     m = re.search(r'\{.*\}', raw, re.S)
     if not m:
         return None
