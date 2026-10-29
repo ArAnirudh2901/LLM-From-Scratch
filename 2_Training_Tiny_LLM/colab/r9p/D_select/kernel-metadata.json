@@ -1,0 +1,20 @@
+{
+ "id": "anirudharavalli/kinthread-r9p-d-select",
+ "title": "kinthread-r9p-d-select",
+ "code_file": "notebook.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": true,
+ "enable_gpu": true,
+ "enable_internet": true,
+ "dataset_sources": [
+  "anirudharavalli/kinthread-real-questions"
+ ],
+ "kernel_sources": [
+  "anirudharavalli/kinthread-r9p-a-baseline",
+  "anirudharavalli/kinthread-r9p-b1-suites-r8p",
+  "anirudharavalli/kinthread-r9p-c-train",
+  "anirudharavalli/kinthread-r9p-b2-suites-r9p"
+ ],
+ "competition_sources": []
+}

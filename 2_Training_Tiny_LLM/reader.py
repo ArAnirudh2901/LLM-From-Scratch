@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from kinlogic.facts import allowed_next, vocabulary
+from kinlogic.facts import allowed_next, budget_filter, compact_people, vocabulary
 from qa_data import _heads, encode_prefix, hidden_states
 
 SPECIALS = ['<pad>', '<unk>', '<bos>', '<c>', '<sep>', '<eos>']
@@ -108,6 +108,10 @@ OF_FORM = False   # train_reader --of_form: targets in the text's order (facts.a
 
 def encode_example(vocab: Vocab, tokens, lf, block: int, rng: random.Random | None = None, unk_p: float = 0.0):
     """ids = <bos> question <c> facts <eos>; returns (ids, index of <c>) or None when too long."""
+    got = compact_people(tokens, lf, N_ENT)   # ids past @31 have no token: renumber, or drop rows with too many people
+    if got is None:
+        return None
+    tokens, lf = got
     if OF_FORM:
         from kinlogic.facts import align_of
         lf = align_of(list(tokens), lf)
@@ -138,8 +142,11 @@ def collate(batch, pad: int, device, mult: int = 16):
     return idx.to(device), tgt.to(device), lm.to(device)
 
 
-def _allowed_ids(vocab: Vocab, written, ents):
-    return [vocab.stoi['<sep>' if a == ';' else a] for a in allowed_next(written, ents) if ('<sep>' if a == ';' else a) in vocab.stoi]
+def _allowed_ids(vocab: Vocab, written, ents, left: int = 1 << 30, reserve: int = 0):
+    toks = allowed_next(written, ents)
+    if reserve:   # near the token budget: finish the statement and write the question (kinlogic.facts.budget_filter)
+        toks = budget_filter(written, toks, left, reserve)
+    return [vocab.stoi['<sep>' if a == ';' else a] for a in toks if ('<sep>' if a == ';' else a) in vocab.stoi]
 
 
 def _prefix(model, vocab: Vocab, chunk, device, max_new):
@@ -184,7 +191,8 @@ def _text(written):
 
 @torch.no_grad()
 def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, sample: bool = False,
-             temperature: float = 1.0, max_new: int = 96, bs: int = 32, check=None) -> list[list[tuple[str, float]]]:
+             temperature: float = 1.0, max_new: int = 96, bs: int = 32, check=None,
+             reserve: int = 0) -> list[list[tuple[str, float]]]:
     """Fact readings for each question, only ever writing valid statements.
     Beam search (k best, by mean log-probability per token) or k samples (for reinforcement learning).
     check(facts) -> bool: beam readings it rejects (no family fits) do not count toward the k, so the search goes on
@@ -209,7 +217,7 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
             lp = torch.log_softmax(logits / (temperature if sample else 1.0), -1).cpu()
             cand = []   # (question, parent row, token, new log-prob)
             for h, (qi, written, score, n) in enumerate(hyps):
-                allowed = _allowed_ids(vocab, written, ents[qi])
+                allowed = _allowed_ids(vocab, written, ents[qi], max_new - step, reserve)
                 a = torch.tensor(allowed)
                 la = lp[h, a] - torch.logsumexp(lp[h, a], 0)   # renormalised over what the grammar allows
                 if sample:

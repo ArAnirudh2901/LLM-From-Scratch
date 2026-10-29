@@ -274,6 +274,48 @@ def allowed_next(written: list[str], ents: list[str]) -> list[str]:
     return out + ['<eos>'] if ';' in out else out
 
 
+QUESTION_STARTS = ('ask', 'who', 'count', 'gender', 'pair', 'prof')
+
+
+def compact_people(tokens: list[str], lf: str, n: int = 32):
+    """(tokens, lf) with the people renumbered @0, @1, ... in order of first appearance, or None when more than `n`
+    people appear. Joined questions continue the numbering past @31, which the reader's vocabulary does not have:
+    those people became <unk> in both the question and the facts (5,292 rows of mix_r8, 2026-10-28)."""
+    seen = {}
+    for t in list(tokens) + lf.split():
+        if re.fullmatch(r'@\d+', t) and t not in seen:
+            seen[t] = f'@{len(seen)}'
+    if len(seen) > n:
+        return None
+    if all(k == v for k, v in seen.items()):
+        return list(tokens), lf
+    ren = lambda t: seen.get(t, t)
+    return [ren(t) for t in tokens], ' '.join(ren(t) for t in lf.split())
+
+
+def budget_filter(written: list[str], allowed: list[str], left: int, reserve: int) -> list[str]:
+    """Keeps a reading completable within its token budget (accepting-path decoding, simplified; arXiv 2610.13896).
+    The question statement is written last, so a reading cut at the budget loses it and the whole reading is lost.
+    Within `reserve` tokens of the end: a reading with no question finishes its statement and starts one; a reading
+    with one ends as soon as its statement is complete. `left` counts the tokens still allowed, this one included."""
+    if left > reserve:
+        return allowed
+    stmts, cur = [], []
+    for t in written:
+        if t == ';':
+            stmts.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    has_q = any(s and s[0] in QUESTION_STARTS for s in stmts + [cur])
+    keep = (lambda xs: [t for t in allowed if t in xs] or allowed)
+    if not cur:
+        return keep(['<eos>'] if has_q else QUESTION_STARTS)
+    if ';' in allowed:   # the statement is complete
+        return keep(['<eos>']) if has_q else keep([';'])
+    return allowed
+
+
 def _allowed(written: list[str], ents: list[str]) -> list[str]:
     n_new = 0
     for t in written:

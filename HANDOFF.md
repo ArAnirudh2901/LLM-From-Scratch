@@ -5,7 +5,20 @@ Read in order: this file -> `2_Training_Tiny_LLM/JOURNEY.md` (story, intuition, 
 `~/.claude/projects/-Users-anirudharavalli-Generative-AI-LLM-from-Scratch/memory/` (MEMORY.md index). On another machine
 use the private bundle `~/kinthread_handoff.tgz` (memory, Gemini keys, real questions; never commit or share it).
 
-## Running now (Kaggle, owner's account, Save & Run All)
+## Current state (2026-10-29): read this first
+
+- Live: v10-r8p on https://kinthread.pages.dev since 2026-10-27. Real dev 73.9% fair / 77.2% verified; locked test
+  68.8% / 72.2% (scored once). Target 85-90%.
+- Next: train r9p with Codex: `2_Training_Tiny_LLM/TRAINING_V11_CODEX.md` (a fixed run-book; six Kaggle notebooks in
+  `2_Training_Tiny_LLM/colab/r9p/`, run from Kinthread-llm-model `main`; decisions computed, locked test only after
+  the owner writes "approve locked").
+- Since 2026-10-26: dev traces and flag replay, balanced and detour training data, the gauntlet and twisted set,
+  locked test v2, exam-pattern mining (details: `2_Training_Tiny_LLM/HANDOFF.md`, sections 2026-10-28 and 2026-10-29).
+- Website `main`: v10 decoder parity fix and the pasted text read as written (runtime e881499ef517); not deployed.
+- Branches: only `main` in all three repos.
+- The sections below are history.
+
+## Was running 2026-10-25 (finished; final selection on 2026-10-26)
 - r8-final: notebook `notebookf6d1e34e7f` version 6 (causal reader). r8p-final: `notebook99ae0586bd` version 7
   (prefix-LM). Same data/code: per-type balanced `data/mix_r8` (build_mix.py), no-relation rows, leak guard, OOM
   fallback. Started ~2026-10-25 20:00 IST, ~4 h each. Output: `runs/v10-r8[p]/best.pt`, `real_dev.json`,

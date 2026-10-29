@@ -12,7 +12,8 @@ import random
 import re
 from dataclasses import dataclass
 
-from .engine import World, relation_in
+from .engine import World, relation_in, solve
+from .facts import parse
 from .names import INDIAN_F, INDIAN_M, LETTERS, SURNAMES, WORLD_F, WORLD_M
 from .prepare import prepare
 
@@ -634,7 +635,7 @@ def _np_facts(q: Q, anchor: Ref, runs_words, last: Ref | None):
     return facts, cur
 
 
-def _run_words(q: Q, start, runs, side_p=0.25):
+def _run_words(q: Q, start, runs, side_p=0.25, only_p=0.45):
     """Words for consecutive hop runs from start, with "only" when that relative is the only one."""
     fam, rng = q.fam, q.rng
     out, cur = [], start
@@ -646,7 +647,7 @@ def _run_words(q: Q, start, runs, side_p=0.25):
         if moves[0] == 'U' and len(moves) > 1 and rng.random() < side_p:
             side = 'paternal' if fam.g(run[0][1]) == 'M' else 'maternal'
         only = False
-        if word in ('son', 'daughter', 'brother', 'sister') and rng.random() < 0.45:
+        if word in ('son', 'daughter', 'brother', 'sister') and rng.random() < only_p:
             only = len(fam.w.relatives(cur, word)) == 1
         out.append((word, side, only, end))
         cur = end
@@ -710,6 +711,168 @@ def q_nested(rng) -> dict | None:
         q.add(ask_text(rng, rb.surface, ra.surface), [{'t': 'ask', 'x': rb, 'y': ra}])
         t = fam.truth(b, a)
     return q.finish('nested', options_for(rng, t['label']) if rng.random() < 0.4 else None, {'truth': t['key']})
+
+
+# ---------- obfuscated descriptions (LogiQAte, arXiv 2602.01132): one person by a longer, still exact path ----------
+
+DETOUR = {'U': ('U', 'S'), 'S': ('D', 'U'), 'D': ('S', 'D'), 'B': ('U', 'D')}
+ONE_EACH = {'father', 'mother', 'husband', 'wife', 'father-in-law', 'mother-in-law'}
+
+
+def _exact(word, side, only) -> bool:
+    """The step names one person whatever the family: "mother's husband", "the only son", "paternal grandfather".
+    ("The son of Urmila's husband's mother" may be her husband; the engine does not see that.)"""
+    return only or word in ONE_EACH or (side is not None and word in ('grandfather', 'grandmother'))
+
+
+def _via(w, prev, move, node, rng):
+    """The relative a one-hop move can go through instead: father = mother's husband, husband = son's father,
+    son = wife's son, brother = father's (only) son. None when the family has no such relative (World gives -1)."""
+    if move == 'U':
+        other = w.mother(prev) if w.father(prev) == node else w.father(prev)
+        return other if other >= 0 and w.spouse(other) == node else None
+    if move == 'S':
+        kids = [c for c in w.children(prev) if c in w.children(node)]
+        return rng.choice(kids) if kids else None
+    if move == 'D':
+        sp = w.spouse(prev)
+        return sp if sp >= 0 and node in w.children(sp) else None
+    parents = [x for x in (w.father(prev), w.mother(prev)) if x >= 0 and node in w.children(x)]
+    return rng.choice(parents) if parents else None
+
+
+def detour_hops(fam: Family, a, b, rng, n=1):
+    """The shortest path a -> b with n hops each replaced by a two-hop detour through a real relative."""
+    hops = fam.hops(a, b)
+    for _ in range(n):
+        seen = {a, *(x for _, x in hops)}
+        order = list(range(len(hops)))
+        rng.shuffle(order)
+        for i in order:
+            m, node = hops[i]
+            mid = _via(fam.w, a if i == 0 else hops[i - 1][1], m, node, rng)
+            if mid is not None and mid not in seen:
+                hops = hops[:i] + [(DETOUR[m][0], mid), (DETOUR[m][1], node)] + hops[i + 1:]
+                break
+        else:
+            return None
+    return hops
+
+
+def obfuscation_set(rng, levels=(0, 1, 2)) -> list[dict] | None:
+    """One family and pair described with each number of detours, with the same names, sentence form and options:
+    rows whose answers must agree (the repeatability check) and harder training rows. None unless the exact facts of
+    every level give the true answer, and only it."""
+    fam = _family(rng, 6, 12)
+    pair = pick_pair(rng, fam, 1, 4)
+    if not pair:
+        return None
+    a, b = pair
+    truth, seed, mode = fam.truth(a, b), rng.random(), rng.random()
+    rows = []
+    for n in levels:
+        path_rng = random.Random(seed)
+        hops = detour_hops(fam, a, b, path_rng, n)
+        if hops is None:
+            return None
+        q = Q(path_rng, fam, Names(random.Random(seed + 1)))
+        words = _run_words(q, a, chunks(hops, path_rng, p_long=0.2), only_p=1.0)
+        if any(x in (a, b) for _, _, _, x in words[:-1]) or (n and not all(_exact(*w[:3]) for w in words)):
+            return None
+        q.rng = random.Random(seed + 2)   # the same wording at every level
+        ra, rb = q.ref(a), q.ref(b)
+        if mode < 0.4:   # "Ravi is the husband of Mohan's mother. How is Ravi related to Mohan?"
+            facts, _ = _np_facts(q, ra, words, rb)
+            np_ = _np(q.rng, ra.surface, _phrase(words))
+            q.add(q.rng.choice([f'{rb.surface} is {np_}.', f'{cap(np_)} is {rb.surface}.']), facts)
+            q.add(ask_text(q.rng, ra.surface, rb.surface), [{'t': 'ask', 'x': ra, 'y': rb}])
+        elif mode < 0.7:   # 'Pointing to Ravi, Mohan said, "He is my mother's husband."'
+            facts, _ = _np_facts(q, ra, words, rb)
+            pron = 'He' if rb.g == 'M' else 'She'
+            q.add(f'Pointing to {rb.surface}, {ra.surface} said, "{pron} is {_np(q.rng, "my", _phrase(words))}."', facts, [rb])
+            q.add(ask_text(q.rng, ra.surface, rb.surface), [{'t': 'ask', 'x': ra, 'y': rb}])
+        else:   # "How is the husband of Mohan's mother related to Mohan?"
+            facts, target = _np_facts(q, ra, words, None)
+            q.add(f'How is {_np(q.rng, ra.surface, _phrase(words))} related to {ra.surface}?',
+                  facts + [{'t': 'ask', 'x': ra, 'y': target}])
+        opts = options_for(q.rng, truth['label']) if q.rng.random() < 0.4 else None
+        ex = q.finish('obfuscated', opts, {'truth': truth['key'], 'detours': n}, noise=False)
+        if ex is None:
+            return None
+        got = solve(parse(ex['lf'])[0]).get('questions') or [{}]
+        ans = got[-1].get('answers') or [{}]
+        if got[-1].get('status') != 'unique' or ans[0].get('key') != truth['key']:
+            return None
+        rows.append(ex)
+    return rows
+
+
+class Lineage(Family):
+    """One couple and two lines of descent from it, `up` and `down` generations long; `ends` are the two people
+    (an ancestor when a line is empty, cousins of any degree otherwise). Everyone on a line but its end is married."""
+
+    def __init__(self, rng: random.Random, up: int, down: int):
+        self.w, self.people, self.level = World(), [], {}
+        w = self.w
+
+        def person(g, lev):
+            i = w.add(f'@p{len(self.people)}')
+            w.gen[i] = g
+            self.people.append(i)
+            self.level[i] = lev
+            return i
+
+        top = (person('M', 0), person('F', 0))
+        w.marry(*top)
+        self.ends = []
+        for length in (up, down):
+            fa, mo, cur = *top, rng.choice(top)
+            for lev in range(1, length + 1):
+                cur = person(rng.choice('MF'), lev)
+                w.set_parent(cur, fa, 'fa'); w.set_parent(cur, mo, 'mo')
+                if lev < length:
+                    s = person('F' if w.gen[cur] == 'M' else 'M', lev)
+                    w.marry(cur, s)
+                    fa, mo = (cur, s) if w.gen[cur] == 'M' else (s, cur)
+            self.ends.append(cur)
+        w.normalize()
+
+
+def q_generations(rng, up: int | None = None, down: int | None = None) -> dict | None:
+    """Long lines of descent, up to ten generations, and cousins of any degree: "A is the father of B. ..." with the
+    statements often out of order and spouses as distractors. How is X related to Y?"""
+    up = rng.randint(0, 10) if up is None else up
+    down = rng.randint(2 if up < 2 else 0, 10) if down is None else down
+    if up + down < 2 or (up and down and up + down < 3):
+        return None
+    fam = Lineage(rng, up, down)
+    a, b = fam.ends
+    if a == b:
+        return None
+    q = Q(rng, fam)
+    stmts = _chain_statements(q, a, b, p_long=0.15)
+    on_path = {a, b, *(n for _, n in fam.hops(a, b))}
+    for node in list(on_path):   # "Ravi's wife is Sita": true but not needed
+        sp = fam.w.spouse(node)
+        if sp >= 0 and sp not in on_path and rng.random() < 0.2:   # World gives -1 for no spouse
+            rx, ry = q.ref(node), q.ref(sp)
+            word = 'husband' if fam.g(sp) == 'M' else 'wife'
+            stmts.append((state(rng, rx.surface, ry.surface, word), [F(rx, word, ry)]))
+    if rng.random() < 0.6:
+        rng.shuffle(stmts)
+    for text, fs in stmts:
+        q.add(cap(text) + '.', fs)
+    x, y = (a, b) if rng.random() < 0.5 else (b, a)
+    rx, ry = q.ref(x), q.ref(y)
+    q.add(ask_text(rng, rx.surface, ry.surface), [{'t': 'ask', 'x': rx, 'y': ry}])
+    t = fam.truth(x, y)
+    return q.finish('generations', options_for(rng, t['label']) if rng.random() < 0.4 else None,
+                    {'truth': t['key'], 'up': up, 'down': down})
+
+
+def q_obfuscated(rng) -> dict | None:
+    rows = obfuscation_set(rng, (rng.choice([1, 1, 2]),))
+    return rows[0] if rows else None
 
 
 SPEECH_OPEN = [
@@ -1443,6 +1606,8 @@ def q_deep(rng) -> dict | None:
 MIX = {'statements': 20, 'nested': 10, 'speech': 12, 'identity': 6, 'introduce': 6, 'coded': 12, 'puzzle': 12,
        'sufficiency': 6, 'claims': 6, 'story': 10, 'deep': 18}
 KINDS = {k: globals()[f'q_{k}'] for k in MIX}
+KINDS['obfuscated'] = q_obfuscated   # opt-in (not in MIX), so sample() keeps its distribution
+KINDS['generations'] = q_generations
 
 
 def sample(rng: random.Random, mix: dict | None = None) -> dict:

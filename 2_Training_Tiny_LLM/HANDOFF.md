@@ -110,3 +110,147 @@ Before training, use a stratified long-story development set to decompose exact 
 ### Cloud Claude context
 
 This handoff is self-contained for Claude running in the cloud. Read this repository's `AGENTS.md`, `HANDOFF.md`, `SYNTHETIC_DATASET_PLAN.md`, `JOURNEY.md`, and `RESEARCH.md`; do not assume access to this Mac's `~/.claude` memory or local private files. Local Claude memory is supplemental and is not part of the GitHub handoff.
+
+## 2026-10-28 — measure where dev points are lost (per-question trace)
+
+`eval.run_real --trace` records, for every question: the route (an exact reader `codes` / `rules` / `speech`, or the
+model), every reading the vote saw with the engine's answer and whether it reaches the key, and the final pick.
+`--trace_shadow` also answers each exactly-read question with the exact readers off, which shows how often the rules
+are confidently wrong where the model would be right. The hooks only observe: the dev score must equal FINAL.json's
+528/714 fair; if it does not, the trace is invalid. Run on dev only (never `--split test`). Shadow roughly doubles
+model time on exactly-read questions.
+
+```bash
+python -m eval.run_real --ckpt runs/v10-r8p-final/best.pt --split dev --adaptive 1.0 --hybrid \
+  --verifier runs/v10-r8p-final/verifier.json --cover --split_search --para 2 --k 16 \
+  --trace runs/v10-r8p-final/trace_dev.jsonl --trace_shadow --out runs/v10-r8p-final/real_dev_traced.json
+python -m eval.trace_report runs/v10-r8p-final/trace_dev.jsonl --out runs/v10-r8p-final/trace_dev_report.json
+```
+
+Each miss lands in one bucket: exact reader wrong (fix or cross-check the rules), no reading right (reading coverage:
+training data in that wording), right reading not picked (selection: verifier). A separate tag counts misses where the
+engine found no family link although the key names a relation (solver conventions). Example: in "Barkha and Chandresh
+are siblings. Manish has two children ... Hansa has only one son ...", the engine answers "not related" even from
+correct facts, and "granddaughter" once everyone named is assumed to be one family (`members 5`). Decide the next
+round of work from these counts, per category.
+
+## 2026-10-28 — decoder parity fixes, answer-stage flags, balance and repeatability tools
+
+Written in the cloud mirror (no torch, no private real questions). Nothing here changes the checkpoint or the default
+answer path; every answer-stage change is a flag that is off until dev says otherwise.
+
+**Answer-stage flags** (`eval.run_real`, env `KIN_*` in `kinlogic/exam.py`):
+`--closure` ("not related" with unnamed relatives or `has` facts: retry with everyone named as one family, never when
+"no relation" is an option), `--core_repair` (every reading contradicts: find a minimal conflicting set by deletion and
+answer without each of its facts), `--lever` (verifier probability times the reader weight instead of replacing it),
+`--trace_pow p` (vote weight times traceability^p: the share of facts whose two people share a sentence), `--max_new`
+(output budget; 63% of long-story gold readings exceed 96 tokens) and `--reserve r` (within r tokens of the budget,
+finish the statement and write the question: `kinlogic.facts.budget_filter`). Always on: "my. wife" -> "my wife"
+(`prepare.normalize`), and `reader.encode_example` renumbers people by first appearance and drops rows with more than
+32 (2.2% of mix_r8 rows were silently encoded with `<unk>` people).
+
+Score them from one traced dev run without re-reading (dev only; the locked test is never used for this):
+
+```bash
+python -m eval.rescore_trace runs/v10-r8p-final/trace_dev.jsonl --verifier runs/v10-r8p-final/verifier.json --cover --all
+```
+
+It prints each setting's dev score and McNemar against `base`. Adopt a flag only if it wins on dev with p < 0.05.
+
+**Browser decoder (Kinthread `runtime/v10-decoder.js`, runtime a171d14ed9a4).** Two parity bugs against
+`reader.generate`, both fixed with tests: each decoded token did not attend to its own key/value slot (first-step
+log-prob error 0.41; now 0), and `<eos>` was only allowed after a written `;`, so every reading took one extra forced
+step. The beam now also stops at k finished readings, like Python. On 89 hard local rows (reworded and long stories),
+top-1 engine answers were 54 / 52 / 53 (production / slot fix / both): no measurable accuracy change, mean decode
+4.5 s -> 2.8 s. Still different from the measured pipeline: the site sends the v8 `forModel` rewording and strips the
+exam question and options (so no option mapping), runs without `--adaptive`/`--para`, and lower tiers use beam 4/8.
+
+**Balance.** `python -m eval.balance_report <file>` profiles any training file by question format (read from the
+text), answer, question type, fact count, people, input/output length and constraint words. mix_r8: statements 28.3%,
+coded 18.9%, direct speech 15.4%, family puzzle 13.7%, indirect speech 11.5%, long story 6.1%, possessive chain 2.4%,
+nested clauses 2.3%, data sufficiency 1.5%; questions ask 81.7%, who 4%, gender 2.1%, pair 1.9%, count 1.8%; 7.1% of
+gold readings exceed 96 tokens. `build_balanced.py` fills every format to the same count with answers (<= 1/12 of a
+format), fact counts (<= 1/3) and source kinds (<= 1/2) spread inside it; caps relax x3 in a second pass for formats
+that cannot reach them. Each row must parse, have <= 32 people, fit 190 output tokens, and (relation questions) read
+to its stored answer, and only it, through the engine. Long stories come from `generate_balanced_question_types.py`.
+
+**Detour (obfuscated) questions.** `kinlogic.generate.obfuscation_set` writes one family and pair with 0, 1 and 2
+detours ("father" -> "mother's husband", "son" -> "wife's son", "brother" -> "father's only son"), same names, wording
+and options; `q_obfuscated` is the opt-in kind (`KINDS['obfuscated']`, not in `MIX`, so `sample()` is unchanged).
+After a detour, every step must name one person whatever the family (`_exact`): "the son of Urmila's husband's
+mother" may be her husband, and the engine calls it unique, so such rows are rejected.
+
+**Repeatability.** `python -m eval.consistency --groups 300 [--reader gold|exact | --ckpt ...]` scores answer
+agreement and accuracy under renaming (to names the name table reads the same way), option shuffles, fact-sentence
+reordering and 1-2 detours. Gold facts: 100% agreement (engine and answer mapping are invariant). Rule readers only:
+96.7% of groups agree; detours flip 6.7% of answers. The model figure needs torch:
+
+```bash
+python -m eval.consistency --groups 300 --ckpt runs/v10-r8p-final/best.pt --k 16 --out runs/v10-r8p-final/consistency.json
+```
+
+Copy to LLM-From-Scratch: `build_balanced.py`, `eval/{balance_report,consistency,rescore_trace,trace}.py`,
+`eval/run_real.py`, `kinlogic/{exam,facts,generate,prepare}.py`, `reader.py`, `tests/test_{answer_options,balance_consistency}.py`.
+
+**Locked test v2 (`eval/locked.py`).** v1 halves one pool by hash, so site templates sit in dev and test alike. v2 is
+frozen from new questions only (scrape new sites with `eval.sites` into `data/fresh_online/`), from sites with no
+question in the v1 dev half, minus any question within `eval.leak.NEAR` (people-masked 3-gram Jaccard) of a dev
+question. The manifest holds hashes only; dev and v1 runs exclude these questions; `--split locked2` refuses a partial
+run and a second score without `--rescore_reason`, and appends checkpoint SHA-256, arguments and scores to
+`data/locked_v2_ledger.jsonl`.
+
+```bash
+python -m eval.locked --freeze --pattern 'data/fresh_online/*.jsonl'     # once, before any v11 work looks at them
+python -m eval.run_real --ckpt <selected>.pt --pattern 'data/fresh_online/*.jsonl' --split locked2 <FINAL.json settings>
+```
+
+## 2026-10-28 — gauntlet, deep lineages, twisted set, r9p notebook
+
+**Gauntlet (`eval/gauntlet.py`, `data/gauntlet_v1.jsonl.gz`, evaluation only, leak-guarded).** 1,140 generated questions
+in 19 categories (60 each: lines of descent of 3-5 and 6-10 generations, cousins up to the fifth degree, 1/2/3
+detours, direct and indirect speech, introductions, identities, nested, shuffled statements, deep chains, coded,
+puzzles, sufficiency, claims, 80-240 word stories, two-family stories), each with a renamed or option-shuffled twin,
+plus 28 hand-written twisted questions (`eval/twisted_set.py`, all verified by `python -m eval.twisted_set`). Expected
+answers come from the gold facts through the answer pipeline; gold scores 100%, rule readers alone 45.7%.
+
+Production pipeline (Kinthread browser runtime with the fixed decoder, Node + Pyodide, beam 8, run on 667 questions:
+30 per category, all generations rows and all twisted ones): **614/667 = 92.1%**. Weak: claims 63%, puzzles 70%, two
+detours 77%, sufficiency 77%, three detours 83%, twisted 24/28 (missed: two families joined only by "friends" read as
+cousins, one sufficiency, one claims, one deep in-law chain). Strong: 3-10 generations 97-98% (rules read only ~22% of
+these: the model does), deep cousins 100%. Speech, coded and story rows are 100% read by the exact rules (the
+generators write rule-parseable text), so those cells say little about the model. Twins: same answer 100% except deep
+chains (92%) and sufficiency (93%). Generated questions are not real exams (real locked: 68.8%); use the gauntlet for
+where the reader breaks, the real dev split for decisions.
+
+**Deep lineages.** `kinlogic.generate.Lineage` / `q_generations` (opt-in kind): two lines of descent from one couple,
+up to ten generations each, statements often shuffled, spouses as distractors. Fixed on the way: `World.father/mother/
+spouse` return -1 for none, and the new detour/lineage code had tested `is not None`, which let -1 index the last
+person (`test_generated_questions_are_true` caught it).
+
+**Next run.** `colab/r9p/C_train` (was `colab/r9p_kaggle.ipynb`; r8p warm start checked by SHA-256, `balanced_mix_v1` added, block 512) and
+`TRAINING_V11_CODEX.md` (the full train / select / locked procedure and the hypothesis order toward 85-90%).
+
+**Training supplements (candidates, not trained on yet).** `data/balanced_mix_v1.jsonl.gz` (22,500 rows; manifest next to
+it): 9 formats x 2,500; questions 79% ask, 7% none (claims, sufficiency), 5.6% who, 3.4% gender, 3.3% pair, 1.3% count
+(mix_r8: 81.7% ask); 1,137 distinct answers, none above 4.6%; people <= 32; fact tokens <= 190 (2.3% above 128).
+`data/detour_v1.jsonl.gz` (4,000 rows, `build_detours.py`): 1/2/3 detours equally, top answer 4.7%. Both are exact
+generator facts, engine-checked; the leak guard keeps the gauntlet out at training time.
+
+**Exam-pattern mining (`eval/mine_patterns.py`).** Counts what real dev questions look like (openings, question forms,
+constructions, kin words, coded expression size, length, people, options, answers, masked skeletons shared by 3+
+questions) next to generator or training-file output, with per-feature model accuracy from a dev trace. Writes counts
+only, never question text; reads dev only and skips locked2. Needs the private real questions, so it runs on Kaggle or
+the owner's Mac (TRAINING_V11_CODEX.md step 1b). Stand-in run on the 152 authored questions: generated questions are
+far less often 4-option MCQ (16% vs 95%) and "How is X related to Y?" (25% vs 84%).
+
+## 2026-10-29 — r9p run-book for Codex (start here for training)
+
+`TRAINING_V11_CODEX.md` is now a run-book for a smaller model: a prompt to paste, fixed rules, setup, six steps each
+run by one command (`colab/r9p/run_step.sh A|B1|C|B2|D|E`), what to check and copy after each, a STOP-message table
+and a report template. The notebooks are generated by `colab/r9p/build_notebooks.py` (one folder per step with
+`notebook.ipynb` and `kernel-metadata.json` for `kaggle kernels push`); every cell stops with `STOP: ...` on any
+problem; outputs are split into `public/` (counts only, committed under `results/r9p/<step>/`) and `private/` (real
+question text, kept on Kaggle and in `~/kaggle_r9p`). Decisions are computed, not judged: `eval.rescore_trace --out`
+gives the adopted answer flags, `eval/compare_runs.py` the dev adoption rule (>= 2 points, more wins than losses,
+McNemar p < 0.05), and step D adds the gauntlet and consistency checks into `decision.json`. Step E (locked test) runs
+only after the owner writes "approve locked". The old `colab/r9p_kaggle.ipynb` is replaced by `colab/r9p/C_train`.

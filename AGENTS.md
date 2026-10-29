@@ -100,7 +100,7 @@ Python with torch: `.venv/bin/python` in this repo (needs pandas + pyarrow for t
   step 6,000; v8 is the site's current deployed model until browser parity is proven); optimise the runtime only.
 - Weights, checkpoints and data stay git-ignored here; they are published only in Kinthread-llm-model (and the
   exported model in Kinthread).
-- Commit or push only when asked. Default branch `main` (includes the kinship work); `kinship-qa-web` mirrors it.
+- Commit or push only when asked. One branch only: `main` (includes the kinship work; `kinship-qa-web` was merged and retired 2026-10-29).
 - Commits are authored as `Anirudh Aravalli <anirudh30012005@gmail.com>` (ArAnirudh2901; set in git config). Never
   add `Co-Authored-By: Claude` or `Claude-Session` lines. If `gh` is signed in as another account, push with the
   owner's token (see Kinthread's AGENTS.md) and never act as the other account.
@@ -189,3 +189,11 @@ Mirrored the deterministic `generate_balanced_question_types.py` builder, its sp
 - 2026-10-28 (long-story reader baseline): Long-story baseline diagnostic (same fixed 15 rows: five each from 80–120, 121–170, and 171–240 configured word bands): current v10-r8p checkpoint SHA remains 38c289d351d6517b5cde1bc9fb64ea97bd33eee193639d6351edda52fdfd7a52. Python reader top-1 matched 5/15 gold answers at the default 96 generated-token cap and 12/15 when only the diagnostic cap was raised to 192. All 1,250 long-story prefixes fit within 236 tokens, below the 320-token prefix budget with max_new=192, so the test did not truncate their input. Three medium/extended cases still failed. This tiny same-generator sample is diagnostic, not an accuracy estimate; no model weights or production runtime changed.
 
 - 2026-10-28 (synthetic-data candidates and long-story baseline): added `generate_balanced_question_types.py` and forced direct/indirect modes in `kinlogic/generate.py`; `kinlogic/speech.py` now parses an explicit named speaker in reported clauses. The deterministic graph-generated candidate contains 3,750 rows: 1,250 each direct speech, indirect speech, and long stories; 25 canonical answer buckets have exactly 50 rows per format. All rows were accepted by the exact readers/solver; the 2,500 speech MCQs each have five parsed options with one gold answer, and paired direct/indirect examples preserve facts, query, and answer. Data SHA-256: `315dccb5d2a9bdf0b3f32441601babb6b22d21eb73ad8b4545a51e7311e5cd88`. Separately added a paced, resumable Gemini rewrite generator and stronger prompts/structured-output validation in `kinlogic/reword.py`; the committed Gemini candidate has 1,015 accepted rows from 2,069 attempts (49.1%), 204 focused rows, and 275 tracked API requests at an 8-second minimum interval. It is not relation/format balanced. The Gemini candidate and balanced candidate are separate; neither has been trained on. The v10-r8p checkpoint is unchanged (SHA `38c289d351d6517b5cde1bc9fb64ea97bd33eee193639d6351edda52fdfd7a52`). A fixed 15-story diagnostic was 5/15 at the 96-token generation cap and 12/15 at 192; this is a tiny same-generator diagnostic, not an accuracy estimate. The locked exam remains 68.8% fair / 72.2% verified. See `SYNTHETIC_DATASET_PLAN.md`, `HANDOFF.md`, and `RESEARCH.md` before deciding what to test next; do not infer a training gain or tune against the locked test.
+
+- 2026-10-29 (sync from Kinthread-llm-model): brought the cloud-session work into `2_Training_Tiny_LLM` (60 files, none
+  of which had diverged here): dev traces and flag replay (`eval/trace*.py`, `eval/rescore_trace.py`, off-by-default
+  answer flags in `eval/run_real.py` / `kinlogic/exam.py`), balance and repeatability tools (`eval/balance_report.py`,
+  `eval/consistency.py`, `build_balanced.py`, `build_detours.py`), the gauntlet and twisted set, locked test v2
+  (`eval/locked.py`), exam-pattern mining, run comparison, the website input set, generator detours and lineages,
+  the >32-people drop in `reader.encode_example`, and the r9p Codex run-book (`TRAINING_V11_CODEX.md`, `colab/r9p/`).
+  Data files stay in Kinthread-llm-model. All three repos now keep only `main`.

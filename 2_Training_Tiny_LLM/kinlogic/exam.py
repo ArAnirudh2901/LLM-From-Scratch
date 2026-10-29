@@ -163,6 +163,11 @@ RELAX = os.environ.get('KIN_RELAX', '1') == '1'   # a self-contradictory questio
 DESC_UNNAMED = os.environ.get('KIN_DESC_UNNAMED', '1') == '1'   # described people may turn out to be someone named
 COVER = os.environ.get('KIN_COVER', '0') == '1'   # vote weight: readings must use every named person
 SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for every spoken description (dev +1.1, locked test -0.4 with r3); off: exact speech readings only
+# Answer-time options, off until a dev run (eval.rescore_trace) shows they help:
+CLOSURE = os.environ.get('KIN_CLOSURE', '0') == '1'   # "not related" with unnamed relatives: everyone named is one family
+CORE_REPAIR = os.environ.get('KIN_CORE_REPAIR', '0') == '1'   # every reading contradicts: drop one fact of a minimal conflict
+LEVER = os.environ.get('KIN_LEVER', '0') == '1'   # verifier probability times the reader's weight (LEVER), not instead of it
+TRACE_POW = float(os.environ.get('KIN_TRACE_POW', '0'))   # vote weight times traceability ** TRACE_POW (0: off)
 
 
 def answer(text: str, read, priors: dict | None = None) -> dict:
@@ -234,11 +239,89 @@ def candidates(text: str, read, priors: dict | None = None):
     for k, (lf, score) in enumerate(readings):
         try:
             res = _answer_one(p, lf, read, priors)
+            if CLOSURE:
+                res = _closure(p, lf, read, priors, res)
         except Exception as e:   # one bad reading drops out of the vote, not the whole question
             res = {'answer': 'error', 'option': None, 'status': 'error', 'explanation': f'{type(e).__name__}: {e}', 'facts': lf}
         res['reading'] = k
+        res['trace'] = traceability(p, lf)
         results.append((res, score))
     return p, results
+
+
+def _closure(p, lf, read, priors, res):
+    """A question that asks how two named people are related presupposes a link. When the engine finds none but the
+    reading has unnamed relatives ("has two children", "her only brother"), read everyone named as one family, as a
+    closed-family puzzle states outright, and keep that answer when it fits. Not when "no relation" is an option."""
+    if res.get('status') != 'unrelated' or re.search(r'\bmembers\b', lf) or not re.search(r'#\d+|\bhas\b', lf):
+        return res
+    if any(NOREL.search(t) for _, t in p['options'] or []):
+        return res
+    stmts = [s.strip() for s in lf.split(';') if s.strip()]
+    named = len({t for t in p['tokens'] if re.fullmatch(r'@\d+', t)})
+    q = [s for s in stmts if s.split()[0] in QFACTS]
+    alt = ' ; '.join([s for s in stmts if s not in q] + [f'members {named}'] + q)
+    got = _answer_one(p, alt, read, priors)
+    if got.get('status') in ('error', 'contradiction', 'none', 'unrelated'):
+        return res
+    return {**got, 'via': 'closure'}
+
+
+def _contradicts(p, stmts, read, priors) -> bool:
+    try:
+        return _answer_one(p, ' ; '.join(stmts), read, priors).get('status') == 'contradiction'
+    except Exception:
+        return False
+
+
+def _core_repair(p, results, read, priors, max_readings: int = 3, max_facts: int = 40):
+    """Every reading failed. For the best contradictory readings, find a minimal set of facts that cannot hold together
+    (deletion filtering, as QuickXplain; minimal-core repair, arXiv 2608.14771) and answer without each fact of that
+    set in turn: a misread fact sits in the core. Returns the consistent variants as (result, reader score)."""
+    out, tried = [], 0
+    for r, sc in sorted(results, key=lambda x: -x[1]):
+        if r.get('status') != 'contradiction' or not r.get('facts') or tried >= max_readings:
+            continue
+        tried += 1
+        parts = [s.strip() for s in r['facts'].split('  [')[0].split(';') if s.strip()]
+        qi = [i for i, s in enumerate(parts) if s.split()[0] in QFACTS]
+        core = [i for i in range(len(parts)) if i not in qi]
+        if not qi or len(core) > max_facts:
+            continue
+        for i in list(core):
+            trial = [j for j in core if j != i]
+            if _contradicts(p, [parts[j] for j in trial + qi], read, priors):
+                core = trial
+        for i in core:
+            alt = ' ; '.join(s for j, s in enumerate(parts) if j != i)
+            got = _answer_one(p, alt, read, priors)
+            if CLOSURE:
+                got = _closure(p, alt, read, priors, got)
+            if got.get('status') not in ('error', 'contradiction', 'none'):
+                out.append(({**got, 'via': 'core-repair', 'dropped': parts[i], 'core': [parts[j] for j in core],
+                             'reading': r.get('reading'), 'trace': r.get('trace')}, sc))
+    linked = [v for v in out if v[0].get('status') != 'unrelated']
+    if CLOSURE and linked and not any(NOREL.search(t) for _, t in p['options'] or []):
+        out = linked   # the question presupposes a link (see _closure)
+    return out
+
+
+def traceability(p, lf) -> float | None:
+    """Share of the reading's facts between two named people that one sentence of the question names together (a
+    sentence opening with a pronoun counts with the one before). Facts the text never states in one place are often
+    invented; fully traceable readings are nearly always right (arXiv 2606.27281). None without such facts."""
+    sents = [s for s in _sentences(list(p['tokens'])) if '?' not in s]   # the question names both people: no evidence
+    spans = [set(s) | (set(sents[i - 1]) if i and s and s[0] in ('he', 'she', 'his', 'her', 'they', 'their') else set())
+             for i, s in enumerate(sents)]
+    pairs = []
+    for st in (lf or '').split('  [')[0].split(';'):
+        ws = st.split()
+        people = [w for w in ws if re.fullmatch(r'@\d+', w)]
+        if ws and ws[0] not in QFACTS and len(people) == 2:
+            pairs.append(people)
+    if not pairs:
+        return None
+    return round(sum(any(a in s and b in s for s in spans) for a, b in pairs) / len(pairs), 3)
 
 
 def _answer(text: str, read, priors: dict | None = None) -> dict:
@@ -248,6 +331,8 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
     import math
     p, results = candidates(text, read, priors)
     good = [(r, sc) for r, sc in results if r['status'] not in ('error', 'contradiction', 'none')]
+    if not good and CORE_REPAIR:
+        good = _core_repair(p, results, read, priors)
     if not good:
         return {**results[0][0], 'confidence': 0.0}
     top = max(sc for _, sc in good)
@@ -257,7 +342,13 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
         from .verifier import features
         key = lambda r: r['option'] if p['options'] else r['answer']
         cnt = collections.Counter(key(r) for r, _ in good)
+        base = weights
         weights = [v.prob(features(p, r, sc, top, cnt[key(r)] / len(good), i, len(good))) for i, (r, sc) in enumerate(good)]
+        if LEVER:
+            weights = [a * b for a, b in zip(weights, base)]
+    if TRACE_POW:
+        weights = [wt * max(r['trace'] if r.get('trace') is not None else 1.0, 0.05) ** TRACE_POW
+                   for (r, _), wt in zip(good, weights)]
     if COVER:   # a reading that leaves a named person of the question out has likely dropped a sentence
         people = {t for t in p['tokens'] if re.fullmatch(r'@\d+', t)}
         weights = [wt * 0.35 ** len(people - set(re.findall(r'@\d+', r.get('facts') or ''))) for (r, _), wt in zip(good, weights)]

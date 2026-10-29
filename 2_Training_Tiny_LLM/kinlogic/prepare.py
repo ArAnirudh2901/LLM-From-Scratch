@@ -120,6 +120,7 @@ def normalize(text: str) -> str:
     text = re.sub(r'\b(of|is|to)([A-Z])\b', r'\1 \2', text)   # "daughter ofZ"
     text = re.sub(r'\b([A-Z])\.([A-Z]) (?=is |was |has )', r'\1. \2 ', text)   # "grandfather of U.Q is the brother"
     text = re.sub(r"\b(mother|father|brother|sister|son|daughter|wife|husband)s's\b", r"\1's", text)   # "mothers's"
+    text = re.sub(rf"\b(my|his|her|their|our|your)\.\s+(?={REL_WORD})", r'\1 ', text, flags=re.I)   # "my. wife": a stray page period
     text = re.sub(r'\baunty\b', 'aunt', text, flags=re.I)
     text = re.sub(r"([a-z])\s?\?\s?s\b(?=\s+[a-z])", r"\1's", text)   # "son?s uncle": a lost apostrophe
     for a, b in TYPOS:   # common page misspellings of relation words

@@ -134,3 +134,14 @@ For the next model-improvement brainstorm, first separate reading failures from 
 stratified long-story development set: record prefix length, generated-token count, stop reason, exact fact-read
 match, and final answer at both caps. Then compare one controlled training change at a time against the same
 untouched development suite. Preserve the checkpoint and locked test; do not train or tune from these notes alone.
+
+## 2026-10-28 — format-balanced supplement and detour questions
+
+`build_balanced.py` writes a supplement with every question format at the same count (formats are read from the text
+by `eval.balance_report.fmt`; mix_r8 has 1.5–2.4% data sufficiency, nested clauses and possessive chains against 28%
+plain statements). Inside each format no answer exceeds 1/12, no fact-count bucket 1/3 and no source kind 1/2 (relaxed
+x3 only where a format cannot reach them). Every row is exact generator output that the engine reads back to its
+answer, with at most 32 people and at most 190 output tokens, so it also exercises `--max_new 192`. New source:
+`kinlogic.generate.q_obfuscated` (LogiQAte-style detours, arXiv 2602.01132), where every detour step names exactly one
+person. Train on it only as a mixed-in share (it is not a replacement for mix_r8), and judge it on dev, the consistency
+suite (`eval.consistency`) and long-story rows, not on generated sets alone.

@@ -75,8 +75,8 @@ def correct(r, res):
     return bool(mv_w and mv_g and len(mv_w) == len(mv_g) and all(a == c and (g is None or h is None or g == h) for (a, g), (c, h) in zip(mv_w, mv_g)))
 
 
-def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None):
-    from eval.real_clean import broken
+def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None, tracer=None, split=split_of):
+    from eval.real_clean import broken, category
     from eval.verify_keys import OUT as KEYS, qhash
     keys = {}
     for f in sorted(glob.glob(KEYS.replace('.json', '*.json'))):   # checked answer keys (eval.verify_keys, all shards)
@@ -84,23 +84,29 @@ def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None):
     by = collections.defaultdict(lambda: [0, 0])
     sp = collections.defaultdict(lambda: [0, 0])
     misses, oks = [], []
-    for r in rows:
+    solve = lambda text: answer_fn(text) if answer_fn else answer_corrected(text, read, threshold) if fix else answer_adaptive(text, read, read_more, threshold) if read_more else answer(text, read)
+    for i, r in enumerate(rows):
         text = as_text(r)
-        res = answer_fn(text) if answer_fn else answer_corrected(text, read, threshold) if fix else answer_adaptive(text, read, read_more, threshold) if read_more else answer(text, read)
+        if tracer:
+            tracer.begin(text)
+        res = solve(text)
         ok = correct(r, res)
         oks.append(ok)
-        for k in (split_of(r), f'{split_of(r)} fair' if not broken(r) else None):
+        for k in (split(r), f'{split(r)} fair' if not broken(r) else None):
             if k:
                 sp[k][0] += ok
                 sp[k][1] += 1
         v = keys.get(qhash(r)) if not broken(r) else None
         if v and v['status'] in ('confirmed', 'corrected'):   # wrong keys fixed, ambiguous questions left out
-            sp[f'{split_of(r)} verified'][0] += res.get('option') == v['key']
-            sp[f'{split_of(r)} verified'][1] += 1
+            sp[f'{split(r)} verified'][0] += res.get('option') == v['key']
+            sp[f'{split(r)} verified'][1] += 1
+        if tracer:
+            tracer.end(r, res, ok, solve, i=i, split=split(r), site=r['site'], category=category(r), fair=not broken(r),
+                       verified_key=v['key'] if v and v['status'] in ('confirmed', 'corrected') else None)
         k = by[r['site']]
         k[0] += ok; k[1] += 1
         if not ok:
-            misses.append({'split': split_of(r), 'site': r['site'], 'q': r['question'][:300], 'want': r.get('answer') or r.get('answer_text'),
+            misses.append({'split': split(r), 'site': r['site'], 'q': r['question'][:300], 'want': r.get('answer') or r.get('answer_text'),
                            'got': res.get('option') or res.get('answer'), 'facts': res.get('facts', '')})
     total = [sum(v[i] for v in by.values()) for i in range(2)]
     return {'real_acc': total[0] / max(1, total[1]), 'n': total[1],
@@ -119,7 +125,8 @@ if __name__ == '__main__':
     ap.add_argument('--cpu', action='store_true')
     ap.add_argument('--out', default=None)
     ap.add_argument('--limit', type=int, default=None, help='first N questions only (quick comparisons)')
-    ap.add_argument('--split', default=None, help="only 'dev' or 'test' questions")
+    ap.add_argument('--split', default=None, help="only 'dev' or 'test' questions, or 'locked2' (eval.locked: scored once)")
+    ap.add_argument('--rescore_reason', default=None, help='locked2 again: why (a new model selected on dev)')
     ap.add_argument('--pattern', default='data/real_questions/*.jsonl', help='question files (data/fresh_online/*.jsonl: questions scraped after training)')
     ap.add_argument('--k', type=int, default=8, help='readings per question (beam width; the engine votes)')
     ap.add_argument('--adaptive', type=float, default=None, help='re-read with beam 2k + 2k samples when the vote share is below this')
@@ -137,6 +144,14 @@ if __name__ == '__main__':
     ap.add_argument('--loops', type=int, default=None, help='looped reader: most loops to run (default: all it was trained with)')
     ap.add_argument('--halt', action='store_true', help='looped reader: stop early when the engine accepts the reading and the exit gate agrees (reader.answer_looped)')
     ap.add_argument('--correct', action='store_true', help='re-read and correct unsure readings (exam.answer_corrected; needs a reader trained on correction rows)')
+    ap.add_argument('--trace', default=None, help='per-question trace (JSONL: route, every reading, engine results) for eval.trace_report')
+    ap.add_argument('--trace_shadow', action='store_true', help='with --trace: also answer exactly-read questions with the exact readers off (the model alone)')
+    ap.add_argument('--max_new', type=int, default=96, help='reader output budget in tokens (long stories need up to ~150)')
+    ap.add_argument('--reserve', type=int, default=0, help='within this many tokens of the budget, finish the statement and write the question (0: off)')
+    ap.add_argument('--closure', action='store_true', help="'not related' with unnamed relatives: retry with everyone named in one family")
+    ap.add_argument('--core_repair', action='store_true', help='every reading contradicts: answer without each fact of a minimal conflicting set')
+    ap.add_argument('--lever', action='store_true', help='verifier probability times the reader weight (LEVER) instead of replacing it')
+    ap.add_argument('--trace_pow', type=float, default=0.0, help='vote weight times reading traceability ** this (0: off)')
     a = ap.parse_args()
     dev = get_device(force_cpu=a.cpu)
     model, vocab = load(a.ckpt, dev)
@@ -144,11 +159,20 @@ if __name__ == '__main__':
     if a.loops and getattr(model, 'n_loop', 1) > 1:
         model.n_loop = a.loops   # answer_looped and generate stop here; beyond the trained depth repeats the last loop
         model.set_loops(model.n_loop)
-    rows = [r for r in load_real(a.pattern) if not a.split or split_of(r) == a.split][:a.limit]
+    import sys
+    from eval.locked import check_once, hashes, record
+    from eval.verify_keys import qhash
+    locked = hashes()   # locked2 questions: never in a dev or v1 run
+    if a.split == 'locked2':
+        check_once(a.rescore_reason, a.limit)
+        rows = [r for r in load_real(a.pattern) if qhash(r) in locked]
+    else:
+        rows = [r for r in load_real(a.pattern) if (not a.split or split_of(r) == a.split) and qhash(r) not in locked][:a.limit]
     from kinlogic.codes import _fits
     chk = (lambda lf: _fits(lf) is not None) if a.check else None
-    more = (lambda b: [x + y for x, y in zip(generate(model, vocab, b, dev, k=2 * a.k, check=chk), generate(model, vocab, b, dev, k=2 * a.k, sample=True, temperature=1.0))]) if a.adaptive else None
-    read = lambda b: generate(model, vocab, b, dev, k=a.k, check=chk)
+    gen = lambda b, m=model, v=vocab, **kw: generate(m, v, b, dev, max_new=a.max_new, reserve=a.reserve, **kw)
+    more = (lambda b: [x + y for x, y in zip(gen(b, k=2 * a.k, check=chk), gen(b, k=2 * a.k, sample=True, temperature=1.0))]) if a.adaptive else None
+    read = lambda b: gen(b, k=a.k, check=chk)
     if a.ensemble:   # more readers vote through the same engine: each adds its k readings
         others = [load(c, dev) for c in a.ensemble.split(',')]
         one = read
@@ -170,9 +194,9 @@ if __name__ == '__main__':
     fn = (lambda text: answer_looped(text, model, vocab, dev, k=a.k)) if a.halt else None
     if a.verifier:
         os.environ['KIN_VERIFIER'] = a.verifier
-    if a.cover:
-        import kinlogic.exam as E
-        E.COVER = True
+    import kinlogic.exam as E
+    E.COVER = E.COVER or a.cover
+    E.CLOSURE, E.CORE_REPAIR, E.LEVER, E.TRACE_POW = a.closure, a.core_repair, a.lever, a.trace_pow
     if a.para:   # self-consistency over surface forms: the same question with other names and code symbols
         import random
         import zlib
@@ -196,7 +220,16 @@ if __name__ == '__main__':
                 return outs[0]
             best = votes.most_common(1)[0][0]
             return next(o for o in outs if o.get('option') == best)
-    score, misses = run(read, rows, more, a.adaptive or 0.6, fix=a.correct, answer_fn=fn)
+    tracer = None
+    if a.trace:
+        from eval.trace import Tracer
+        tracer = Tracer(a.trace, shadow=a.trace_shadow).install()
+    score, misses = run(read, rows, more, a.adaptive or 0.6, fix=a.correct, answer_fn=fn, tracer=tracer,
+                        split=(lambda r: 'locked2') if a.split == 'locked2' else split_of)
+    if a.split == 'locked2':
+        record(score, a.ckpt, sys.argv[1:], a.rescore_reason)
+    if tracer:
+        tracer.close()   # perturbed / reworded copies below are scored untraced
     print(json.dumps({k: v for k, v in score.items() if k != 'ok'}, indent=1))
     if a.perturb:
         from eval.perturb import compare, variants

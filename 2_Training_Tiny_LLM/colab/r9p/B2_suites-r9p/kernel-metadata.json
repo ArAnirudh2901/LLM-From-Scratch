@@ -1,0 +1,19 @@
+{
+ "id": "anirudharavalli/kinthread-r9p-b2-suites-r9p",
+ "title": "kinthread-r9p-b2-suites-r9p",
+ "code_file": "notebook.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": true,
+ "enable_gpu": true,
+ "enable_internet": true,
+ "dataset_sources": [
+  "anirudharavalli/kinthread-real-questions"
+ ],
+ "kernel_sources": [
+  "anirudharavalli/notebook99ae0586bd",
+  "anirudharavalli/notebookf8798397a0",
+  "anirudharavalli/kinthread-r9p-c-train"
+ ],
+ "competition_sources": []
+}

@@ -36,6 +36,9 @@ option matching, "not related", "Either X or Y"). Answer-time boosters (`eval/ru
 | r5 / r6a / r7 | fact grammar growth, STaR, teacher rows, RL tried | r5 locked 62.7%; r7 dev 72.1% (717) |
 | r8 / r8p v5 | dataset v8 balance, prefix-LM option, no-relation | old dev subset: r7 72.9, r8 73.5, r8p 74.3 |
 | final (Oct 25-26) | per-type balanced mix (build_mix), leak guard, verifier + boosters, picked on full dev | r8p + all boosters: dev 73.9% fair / 77.2% verified; locked test 68.8% / 72.2% vs r7 66.2% / 70.5% (+2.6 / +1.7 points) |
+Website release note (2026-10-26): release identity and update integrity are implemented and locally verified in
+Chrome, but the active model remains v8. The selected v10-r8p WASM primitive checks do not yet cover the full browser
+answer pipeline. See `~/Web_Dev/kinthread/MODEL_UPGRADE_PLAN.md` before changing the website release.
 
 ## Data (how to rebuild)
 - Verified pool `data/dataset_v7` (Drive / model repo); extras: rewrites, STaR r2/r3, teacher rows, `pairs_v1`
@@ -81,7 +84,6 @@ mixed probabilities, both builds. This is not the 50-prompt parity suite; no v10
 parity, memory, latency and real Chrome checks before Cloudflare deployment. Constrained devices should use
 worker-based bounded search; high-cost `para=2`/`k=16` is reserved for high tier or explicit deep-check, with the
 quality trade-off visible.
-
 - 2026-10-26: v10 browser-forward prototype extended from one prompt to 50 deterministic generated prompts (13–101 tokens); scalar and SIMD WASM both match PyTorch within 2.86e-5 on prefix/decode/logits/copy-key surfaces and 7.82e-5 on mixture probabilities. This is primitive parity, not end-to-end browser answer parity.
 
 - 2026-10-26 (continued): same 50-prompt fixtures pass through `ReaderWasm` wrapper on SIMD and scalar, including prefill, dynamic cache growth and one-token decode; maximum log-prob difference 2.27e-4 and probability difference 7.82e-5. Grammar-constrained generation remains the next major phase.

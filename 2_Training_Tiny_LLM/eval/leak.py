@@ -11,7 +11,7 @@ import os
 import re
 
 NEAR = 0.8
-HELD_OUT = ('data/reworded_dev.jsonl.gz', 'data/unseen_test.jsonl.gz')
+HELD_OUT = ('data/reworded_dev.jsonl.gz', 'data/unseen_test.jsonl.gz', 'data/gauntlet_v1.jsonl.gz')
 PRINTS = 'data/eval_fingerprint.json.gz'   # hashes only (no question text): lets a machine without the private set guard against it
 
 
@@ -39,7 +39,9 @@ class Guard:
             print('leak guard: real questions not loaded:', e, flush=True)
         for f in HELD_OUT:
             if os.path.exists(f):
-                texts += [r['tokens'] for r in map(json.loads, gzip.open(f, 'rt')) if isinstance(r.get('tokens'), list)]
+                for r in map(json.loads, gzip.open(f, 'rt')):   # rows with tokens, or text (the gauntlet: and its twin)
+                    texts += [r['tokens']] if isinstance(r.get('tokens'), list) else \
+                        [prepare(t)['tokens'] for t in (r.get('text'), r.get('twin')) if t]
         items = {h(' '.join(mask(t))): grams(mask(t)) for t in texts}
         if os.path.exists(PRINTS):   # one entry per question: text and fingerprint of the same question count once
             for e, g in json.load(gzip.open(PRINTS, 'rt')):

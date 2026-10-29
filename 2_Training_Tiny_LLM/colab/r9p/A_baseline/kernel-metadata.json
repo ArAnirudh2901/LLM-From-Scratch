@@ -1,0 +1,18 @@
+{
+ "id": "anirudharavalli/kinthread-r9p-a-baseline",
+ "title": "kinthread-r9p-a-baseline",
+ "code_file": "notebook.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": true,
+ "enable_gpu": true,
+ "enable_internet": true,
+ "dataset_sources": [
+  "anirudharavalli/kinthread-real-questions"
+ ],
+ "kernel_sources": [
+  "anirudharavalli/notebook99ae0586bd",
+  "anirudharavalli/notebookf8798397a0"
+ ],
+ "competition_sources": []
+}
