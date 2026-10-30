@@ -460,9 +460,12 @@ def main():
                 a.accum *= 2
                 print(f'  out of GPU memory: {a.accum} passes per batch from now on', flush=True)
         scaler.unscale_(opt)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
+        # fp16 overflow is expected: GradScaler skips the step and lowers the scale
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=not amp)
         scaler.step(opt)
         scaler.update()
+        if amp and step % 100 == 0 and scaler.get_scale() < 1:
+            raise RuntimeError(f'step {step}: fp16 loss scale fell below 1, gradients keep overflowing')
         if ema is not None:
             with torch.no_grad():
                 for pe, p_ in zip(ema.parameters(), model.parameters()):

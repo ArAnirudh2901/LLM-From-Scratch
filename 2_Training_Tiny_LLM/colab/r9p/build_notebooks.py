@@ -237,7 +237,8 @@ for name, extra in EXTRA_FLAGS.items():
     sh(f'python -m eval.compare_runs {A_DEV} {PRIV}/r9p_dev_{name}.json --out {PUB}/compare_{name}.json')
 '''), code('''
 cmp = {n: json.load(open(f'{PUB}/compare_{n}.json')) for n in EXTRA_FLAGS}
-best = max(cmp, key=lambda n: cmp[n]['gain_points'])
+passing = [n for n in cmp if cmp[n]['adopt']]   # a config meeting the rule beats a bigger non-significant gain
+best = max(passing or cmp, key=lambda n: cmp[n]['gain_points'])
 suites_ok = (B2['gauntlet_correct'] >= B1['gauntlet_correct'] - 0.01
              and B2['consistency_all_agree'] >= B1['consistency_all_agree'] - 0.01)
 decision = {'step': 'D', 'adopt': bool(cmp[best]['adopt'] and suites_ok), 'config': best,

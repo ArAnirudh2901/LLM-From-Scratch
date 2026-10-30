@@ -94,7 +94,10 @@ def call(prompt: str, provider: str, temperature: float = 0.9, json_out: bool = 
         r = _post(f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
                   {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': cfg},
                   {'x-goog-api-key': key})
-        parts = r['candidates'][0]['content'].get('parts', [])
+        cand = (r.get('candidates') or [{}])[0]
+        if not cand.get('content'):   # blocked prompt or a safety/recitation finish
+            raise RuntimeError(f"no content: {r.get('promptFeedback', {}).get('blockReason') or cand.get('finishReason')}")
+        parts = cand['content'].get('parts', [])
         # Do not expose optional thought summaries to JSON/text parsers. Joining all answer text parts also
         # handles a response split across multiple text chunks instead of silently keeping only part zero.
         return ''.join(p.get('text', '') for p in parts if isinstance(p, dict) and p.get('text') and not p.get('thought')).strip()

@@ -171,7 +171,7 @@ export class KinshipQA {
       mod = await import(ENGINES[kind]).then((m) => m.default());
     }
     const simd = kind !== 'scalar';
-    const maxT = kind.endsWith('-mt') ? Math.min(globalThis.navigator?.hardwareConcurrency || 4, maxThreads) : 1;
+    const maxT = kind.endsWith('-mt') ? Math.min(globalThis.navigator?.hardwareConcurrency || 4, maxThreads, 4) : 1;   // 4: pre-started pthread pool (build.sh)
     const get = async (name) => {
       const res = await fetchFn(base + name);
       if (!res.ok) throw new Error(`${name}: ${res.status}`);

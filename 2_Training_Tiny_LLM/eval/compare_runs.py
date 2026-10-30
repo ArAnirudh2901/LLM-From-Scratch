@@ -23,8 +23,15 @@ def compare(old: dict, new: dict, split: str = 'dev', min_gain: float = 2.0, alp
     a, b = old['score'], new['score']
     if len(a['ok']) != len(b['ok']):
         raise SystemExit(f"STOP: the runs scored different question sets ({len(a['ok'])} vs {len(b['ok'])})")
-    wins = sum(n and not o for o, n in zip(a['ok'], b['ok']))
-    losses = sum(o and not n for o, n in zip(a['ok'], b['ok']))
+    if a.get('ids') and b.get('ids') and a['ids'] != b['ids']:
+        raise SystemExit('STOP: the runs scored different questions')
+    if a.get('fair') and b.get('fair') and a['fair'] != b['fair']:
+        raise SystemExit('STOP: the runs disagree on which questions are fair')
+    # wins/losses on the fair questions only, like the fair score; runs older than the mask: same files, same order
+    mask = b.get('fair') or a.get('fair') or [True] * len(a['ok'])
+    pairs = [(o, n) for o, n, f in zip(a['ok'], b['ok'], mask) if f]
+    wins = sum(n and not o for o, n in pairs)
+    losses = sum(o and not n for o, n in pairs)
     (fo, no), (fn, nn) = fair(a, split), fair(b, split)
     po, pn = 100 * fo / max(no, 1), 100 * fn / max(nn, 1)
     p = mcnemar(wins, losses)

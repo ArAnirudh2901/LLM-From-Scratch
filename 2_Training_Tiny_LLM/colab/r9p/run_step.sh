@@ -9,9 +9,14 @@ DIR=$(ls -d colab/r9p/"${STEP}"_* 2>/dev/null | head -1 || true)
 ID=$(python3 -c "import json; print(json.load(open('$DIR/kernel-metadata.json'))['id'])")
 WORK="${KAGGLE_RESULTS:-$HOME/kaggle_r9p}/$STEP"
 rm -rf "$WORK" && mkdir -p "$WORK"
-echo "pushing $DIR as $ID"
-kaggle kernels push -p "$DIR"
-sleep 60
+if [ "${WATCH:-}" = 1 ]; then   # re-attach to a run already pushed
+  echo "watching $ID (no push)"
+else
+  echo "pushing $DIR as $ID"
+  kaggle kernels push -p "$DIR" | tee /dev/stderr | grep -q 'successfully pushed' \
+    || { echo "STOP: push of step $STEP failed (Kaggle allows 2 GPU runs at once)"; exit 1; }
+  sleep 60
+fi
 while true; do
   S=$(kaggle kernels status "$ID" 2>&1 | tr '[:upper:]' '[:lower:]' || true)
   echo "$(date +%H:%M) $S"

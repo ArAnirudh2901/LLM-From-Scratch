@@ -66,7 +66,9 @@ export class ReaderWasm {
 
   setThreads(maxThreads) {
     if (typeof this.mod._reader_set_threads !== 'function') return 1;
-    const threads = this.mod._reader_set_threads(this.ptr, Math.max(1, Math.min(16, maxThreads | 0)));
+    // never more threads than build.sh pre-starts (PTHREAD_POOL_SIZE + 1): set_threads would wait forever
+    const pool = Math.max(1, Math.min(globalThis.navigator?.hardwareConcurrency || 4, 4) - 1) + 1;
+    const threads = this.mod._reader_set_threads(this.ptr, Math.max(1, Math.min(pool, maxThreads | 0)));
     if (threads > 1 && !this.engine.endsWith('-mt')) this.engine += '-mt';
     return threads;
   }

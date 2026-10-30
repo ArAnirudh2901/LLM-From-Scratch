@@ -83,7 +83,7 @@ def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None, tr
         keys.update(json.load(open(f)))
     by = collections.defaultdict(lambda: [0, 0])
     sp = collections.defaultdict(lambda: [0, 0])
-    misses, oks = [], []
+    misses, oks, fairs, ids = [], [], [], []
     solve = lambda text: answer_fn(text) if answer_fn else answer_corrected(text, read, threshold) if fix else answer_adaptive(text, read, read_more, threshold) if read_more else answer(text, read)
     for i, r in enumerate(rows):
         text = as_text(r)
@@ -92,6 +92,8 @@ def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None, tr
         res = solve(text)
         ok = correct(r, res)
         oks.append(ok)
+        fairs.append(not broken(r))
+        ids.append(qhash(r))
         for k in (split(r), f'{split(r)} fair' if not broken(r) else None):
             if k:
                 sp[k][0] += ok
@@ -111,7 +113,7 @@ def run(read, rows, read_more=None, threshold=0.6, fix=False, answer_fn=None, tr
     total = [sum(v[i] for v in by.values()) for i in range(2)]
     return {'real_acc': total[0] / max(1, total[1]), 'n': total[1],
             'splits': {k: f'{a}/{b} = {a / b:.1%}' for k, (a, b) in sorted(sp.items())},
-            'by_site': {k: f'{a}/{b}' for k, (a, b) in sorted(by.items())}, 'ok': oks}, misses
+            'by_site': {k: f'{a}/{b}' for k, (a, b) in sorted(by.items())}, 'ok': oks, 'fair': fairs, 'ids': ids}, misses
 
 
 if __name__ == '__main__':
@@ -166,6 +168,8 @@ if __name__ == '__main__':
     if a.split == 'locked2':
         check_once(a.rescore_reason, a.limit)
         rows = [r for r in load_real(a.pattern) if qhash(r) in locked]
+        if not rows or len(rows) != len(locked):   # never spend the one locked score on a partial or empty run
+            sys.exit(f'locked2: {len(rows)} of {len(locked)} locked questions found (manifest missing or wrong --pattern); nothing scored')
     else:
         rows = [r for r in load_real(a.pattern) if (not a.split or split_of(r) == a.split) and qhash(r) not in locked][:a.limit]
     from kinlogic.codes import _fits
@@ -176,7 +180,7 @@ if __name__ == '__main__':
     if a.ensemble:   # more readers vote through the same engine: each adds its k readings
         others = [load(c, dev) for c in a.ensemble.split(',')]
         one = read
-        read = lambda b: [sum(z, []) for z in zip(one(b), *(generate(m, v, b, dev, k=a.k, check=chk) for m, v in others))]
+        read = lambda b: [sum(z, []) for z in zip(one(b), *(gen(b, m=m, v=v, k=a.k, check=chk) for m, v in others))]
     if a.by_sentence:
         from kinlogic.exam import with_split
         read = with_split(read)
@@ -230,7 +234,7 @@ if __name__ == '__main__':
         record(score, a.ckpt, sys.argv[1:], a.rescore_reason)
     if tracer:
         tracer.close()   # perturbed / reworded copies below are scored untraced
-    print(json.dumps({k: v for k, v in score.items() if k != 'ok'}, indent=1))
+    print(json.dumps({k: v for k, v in score.items() if k not in ('ok', 'fair', 'ids')}, indent=1))
     if a.perturb:
         from eval.perturb import compare, variants
         from eval.real_clean import broken

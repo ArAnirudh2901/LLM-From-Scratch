@@ -149,6 +149,12 @@ def _allowed_ids(vocab: Vocab, written, ents, left: int = 1 << 30, reserve: int 
     return [vocab.stoi['<sep>' if a == ';' else a] for a in toks if ('<sep>' if a == ';' else a) in vocab.stoi]
 
 
+def _budget(model, vocab: Vocab, chunk, max_new):
+    """Output budget of a chunk: max_new when its questions fit, else never cutting a question more than 96 would."""
+    need = max(len(vocab.encode(t)) for t in chunk) + 2
+    return max(min(max_new, 96), min(max_new, model.block_size - need))
+
+
 def _prefix(model, vocab: Vocab, chunk, device, max_new):
     pre = [[vocab.stoi['<bos>']] + vocab.encode(t) + [vocab.stoi['<c>']] for t in chunk]
     pre = [p[-(model.block_size - max_new):] for p in pre]
@@ -203,7 +209,8 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
     out = []
     for b in range(0, len(inputs), bs):
         chunk = inputs[b:b + bs]
-        cache, logits, plen, P, ents = _prefix(model, vocab, chunk, device, max_new)
+        budget = _budget(model, vocab, chunk, max_new)
+        cache, logits, plen, P, ents = _prefix(model, vocab, chunk, device, budget)
         width = k
         rows = torch.arange(len(chunk), device=device)
         if sample:   # k independent samples per question
@@ -213,11 +220,11 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
         logits, plen_h = logits[rows], plen[rows]
         done = [[] for _ in chunk]
         spare = [[] for _ in chunk]   # finished readings `check` rejected
-        for step in range(max_new):
+        for step in range(budget):
             lp = torch.log_softmax(logits / (temperature if sample else 1.0), -1).cpu()
             cand = []   # (question, parent row, token, new log-prob)
             for h, (qi, written, score, n) in enumerate(hyps):
-                allowed = _allowed_ids(vocab, written, ents[qi], max_new - step, reserve)
+                allowed = _allowed_ids(vocab, written, ents[qi], budget - step, reserve)
                 a = torch.tensor(allowed)
                 la = lp[h, a] - torch.logsumexp(lp[h, a], 0)   # renormalised over what the grammar allows
                 if sample:
@@ -239,7 +246,7 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
             nxt_hyps, parents, toks = [], [], []
             for qi, h, t, sc in keep:
                 written, n = hyps[h][1], hyps[h][3] + 1
-                if t == eos or step == max_new - 1:
+                if t == eos or step == budget - 1:
                     txt = _text(written)
                     (done if sample or check is None or check(txt) else spare)[qi].append((txt, sc / n))
                     continue

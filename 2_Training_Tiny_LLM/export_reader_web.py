@@ -59,6 +59,8 @@ def main() -> None:
     cfg = ck['config']
     if cfg.get('arch') != 'v10' or not cfg.get('qk_norm') or not cfg.get('prefix_lm'):
         raise ValueError('expected the selected v10 reader with QK normalization and prefix-LM enabled')
+    if int(cfg['n_embd']) // int(cfg['n_head']) > 64:
+        raise ValueError('head size above 64: web/reader_engine.c keeps at most 64 per head')
     weights = ordered_weights(ck['model'], int(cfg['n_layer']))
     raw = weights.tobytes(order='C')
     shuffled = weights.view(np.uint8).reshape(-1, 4).T.copy().tobytes()
@@ -67,9 +69,9 @@ def main() -> None:
     meta = {
         'arch': 'v10',
         'config': {k: cfg[k] for k in ('vocab_size', 'block_size', 'n_layer', 'n_head', 'n_embd', 'qk_norm', 'prefix_lm')},
-        'rope_base': 10000.0,
-        'rms_eps': 1e-6,
-        'hidden_size': 1024,
+        'rope_base': float(cfg.get('rope_base', 10000.0)),
+        'rms_eps': float(cfg.get('rms_eps', 1e-6)),
+        'hidden_size': int(ck['model']['blocks.0.ffn.w1.weight'].shape[0]),
         'copy': True,
         'd_copy': int(ck['model']['copy_q.weight'].shape[0]),
         'tied_output': True,
