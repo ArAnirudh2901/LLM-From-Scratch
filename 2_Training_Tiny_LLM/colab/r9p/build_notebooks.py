@@ -6,9 +6,10 @@ question text: never commit). Re-run this script after editing it:  python colab
 import json
 import os
 
-USER = 'anirudharavalli'
-REAL = f'{USER}/kinthread-real-questions'   # private dataset holding real_questions_full.tgz
-R8P_NB, FINAL_NB = f'{USER}/notebook99ae0586bd', f'{USER}/notebookf8798397a0'
+USER = 'aranirudh'
+# private dataset: real_questions_full.tgz, the r8p best.pt and FINAL.json + verifier.json (the r8p and
+# final-selection notebooks belong to account anirudharavalli and cannot be attached from USER)
+REAL = f'{USER}/kinthread-real-questions'
 SLUG = {'A': 'kinthread-r9p-a-baseline', 'B1': 'kinthread-r9p-b1-suites-r8p', 'C': 'kinthread-r9p-c-train',
         'B2': 'kinthread-r9p-b2-suites-r9p', 'D': 'kinthread-r9p-d-select', 'E': 'kinthread-r9p-e-locked'}
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +19,7 @@ W = '/kaggle/working'
 PUB, PRIV = f'{W}/public', f'{W}/private'   # public: counts only, safe to commit; private: real question text, never commit
 os.makedirs(PUB, exist_ok=True)
 os.makedirs(PRIV, exist_ok=True)
-REPO, X
+REPO, BRANCH = '/kaggle/temp/Kinthread-llm-model', 'main'
 R8P_SHA = '38c289d351d6517b5cde1bc9fb64ea97bd33eee193639d6351edda52fdfd7a52'
 
 
@@ -274,10 +275,10 @@ print('E DONE')
 
 if __name__ == '__main__':
     out = [
-        write('A', '# r9p step A: r8p baseline on real dev, flag replay, exam-pattern mining\nNo training. About 2-4 h.', A, [R8P_NB, FINAL_NB]),
-        write('B1', '# r9p step B1: r8p on the gauntlet, consistency and unseen suites, and the 192-token dev run\nAbout 3-5 h.', suites('r8p'), [R8P_NB, FINAL_NB]),
-        write('C', '# r9p step C: train r9p from r8p\nAbout 3-6 h.', C, [R8P_NB, FINAL_NB]),
-        write('B2', '# r9p step B2: r9p on the gauntlet, consistency and unseen suites\nAbout 2-4 h.', suites('r9p'), [R8P_NB, FINAL_NB, f"{USER}/{SLUG['C']}"]),
+        write('A', '# r9p step A: r8p baseline on real dev, flag replay, exam-pattern mining\nNo training. About 2-4 h.', A, []),
+        write('B1', '# r9p step B1: r8p on the gauntlet, consistency and unseen suites, and the 192-token dev run\nAbout 3-5 h.', suites('r8p'), []),
+        write('C', '# r9p step C: train r9p from r8p\nAbout 3-6 h.', C, []),
+        write('B2', '# r9p step B2: r9p on the gauntlet, consistency and unseen suites\nAbout 2-4 h.', suites('r9p'), [f"{USER}/{SLUG['C']}"]),
         write('D', '# r9p step D: verifier for r9p, dev comparison with r8p, adopt or keep\nAbout 3-5 h.', D,
               [f"{USER}/{SLUG[k]}" for k in ('A', 'B1', 'C', 'B2')]),
         write('E', '# r9p step E: locked test, once, only with the owner approval\nAbout 1-2 h.', E,

@@ -1,5 +1,5 @@
 {
- "id": "anirudharavalli/kinthread-r9p-c-train",
+ "id": "aranirudh/kinthread-r9p-c-train",
  "title": "kinthread-r9p-c-train",
  "code_file": "notebook.ipynb",
  "language": "python",
@@ -8,11 +8,8 @@
  "enable_gpu": true,
  "enable_internet": true,
  "dataset_sources": [
-  "anirudharavalli/kinthread-real-questions"
+  "aranirudh/kinthread-real-questions"
  ],
- "kernel_sources": [
-  "anirudharavalli/notebook99ae0586bd",
-  "anirudharavalli/notebookf8798397a0"
- ],
+ "kernel_sources": [],
  "competition_sources": []
 }

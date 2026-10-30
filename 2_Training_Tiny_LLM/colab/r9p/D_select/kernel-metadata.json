@@ -1,5 +1,5 @@
 {
- "id": "anirudharavalli/kinthread-r9p-d-select",
+ "id": "aranirudh/kinthread-r9p-d-select",
  "title": "kinthread-r9p-d-select",
  "code_file": "notebook.ipynb",
  "language": "python",
@@ -8,13 +8,13 @@
  "enable_gpu": true,
  "enable_internet": true,
  "dataset_sources": [
-  "anirudharavalli/kinthread-real-questions"
+  "aranirudh/kinthread-real-questions"
  ],
  "kernel_sources": [
-  "anirudharavalli/kinthread-r9p-a-baseline",
-  "anirudharavalli/kinthread-r9p-b1-suites-r8p",
-  "anirudharavalli/kinthread-r9p-c-train",
-  "anirudharavalli/kinthread-r9p-b2-suites-r9p"
+  "aranirudh/kinthread-r9p-a-baseline",
+  "aranirudh/kinthread-r9p-b1-suites-r8p",
+  "aranirudh/kinthread-r9p-c-train",
+  "aranirudh/kinthread-r9p-b2-suites-r9p"
  ],
  "competition_sources": []
 }
