@@ -34,6 +34,17 @@ def stop(msg):
     raise SystemExit('STOP: ' + msg)
 
 
+def par(*cmds):
+    """Runs commands at once, one T4 each (one dev pass takes ~6 h; two in a row pass Kaggle's 12 h limit)."""
+    procs = []
+    for i, cmd in enumerate(cmds):
+        print(f'$ [gpu {i % 2}]', cmd, flush=True)
+        procs.append((cmd, subprocess.Popen(cmd, shell=True, env={**os.environ, 'CUDA_VISIBLE_DEVICES': str(i % 2)})))
+    bad = [cmd for cmd, p in procs if p.wait()]
+    if bad:
+        raise SystemExit(f'STOP: command failed: {bad[0]}')
+
+
 def find(pattern):
     return sorted(glob.glob(f'/kaggle/input/**/{pattern}', recursive=True))
 
@@ -161,13 +172,13 @@ def suites(model):
     pick = ("CKPT = 'runs/v10-r8p-final/best.pt'" if model == 'r8p' else
             "CKPT = one('runs/v10-r9p/best.pt', 'the output of kinthread-r9p-c-train')")
     cells = [code(COMMON + R8P + VERIFIER + f"\nMODEL = '{model}'\n{pick}\nprint(MODEL, CKPT, sha(CKPT)[:12])\n"), code('''
-sh(f'python -m eval.gauntlet --ckpt {CKPT} --k 16 --out {PUB}/{MODEL}_gauntlet.json')
-sh(f'python -m eval.consistency --groups 300 --ckpt {CKPT} --k 16 --out {PUB}/{MODEL}_consistency.json')
-sh(f'python -m eval.evaluate --ckpt {CKPT} --sets unseen --out {PUB}/{MODEL}_unseen.json')
-''')]
+GAUNT = f'python -m eval.gauntlet --ckpt {CKPT} --k 16 --out {PUB}/{MODEL}_gauntlet.json'
+CONS = (f'python -m eval.consistency --groups 300 --ckpt {CKPT} --k 16 --out {PUB}/{MODEL}_consistency.json && '
+        f'python -m eval.evaluate --ckpt {CKPT} --sets unseen --out {PUB}/{MODEL}_unseen.json')
+''' + ("par(f'{GAUNT} && {CONS}', f'python -m eval.run_real --ckpt {CKPT} --split dev {R8P_FINAL} --max_new 192 "
+       "--reserve 8 --out {PRIV}/r8p_dev_final_192.json')\n" if model == 'r8p' else 'par(GAUNT, CONS)\n'))]
     if model == 'r8p':
         cells.append(code('''
-sh(f'python -m eval.run_real --ckpt {CKPT} --split dev {R8P_FINAL} --max_new 192 --reserve 8 --out {PRIV}/r8p_dev_final_192.json')
 s192 = json.load(open(f'{PRIV}/r8p_dev_final_192.json'))['score']['splits']
 json.dump(s192, open(f'{PUB}/r8p_dev_final_192_splits.json', 'w'), indent=1)
 print(s192)
@@ -232,8 +243,9 @@ print('r9p', sha(R9P)[:12], '| flags adopted in step A:', FLAGS or 'none')
 sh(f'python train_verifier.py --ckpt {R9P} --n 1500 --out {PUB}/r9p_verifier.json')
 BASE = f'--adaptive 1.0 --hybrid --verifier {PUB}/r9p_verifier.json --cover --split_search --para 2 --k 16'
 EXTRA_FLAGS = {'final': '', 'final_plus': f'{FLAGS} --max_new 192 --reserve 8'.strip()}
-for name, extra in EXTRA_FLAGS.items():
-    sh(f'python -m eval.run_real --ckpt {R9P} --split dev {BASE} {extra} --out {PRIV}/r9p_dev_{name}.json')
+par(*[f'python -m eval.run_real --ckpt {R9P} --split dev {BASE} {extra} --out {PRIV}/r9p_dev_{name}.json'
+      for name, extra in EXTRA_FLAGS.items()])
+for name in EXTRA_FLAGS:
     sh(f'python -m eval.compare_runs {A_DEV} {PRIV}/r9p_dev_{name}.json --out {PUB}/compare_{name}.json')
 '''), code('''
 cmp = {n: json.load(open(f'{PUB}/compare_{n}.json')) for n in EXTRA_FLAGS}
