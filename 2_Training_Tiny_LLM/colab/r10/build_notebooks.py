@@ -71,7 +71,10 @@ A_DEV = one('private/r8p_dev_final.json', 'the output of kinthread-r9p-a-baselin
 B1 = json.load(open(one('public/B_r8p_summary.json', 'the output of kinthread-r9p-b1-suites-r8p')))
 print('r10', sha(R10)[:12])
 '''), code('''
-sh(f'python train_verifier.py --ckpt {R10} --n 1500 --out {PUB}/r10_verifier.json')
+par(f'python train_verifier.py --ckpt {R10} --n 1500 --out {PUB}/r10_verifier.json',   # suites need no verifier: other T4
+    f'python -m eval.gauntlet --ckpt {R10} --k 16 --out {PUB}/r10_gauntlet.json && '
+    f'python -m eval.consistency --groups 300 --ckpt {R10} --k 16 --out {PUB}/r10_consistency.json && '
+    f'python -m eval.evaluate --ckpt {R10} --sets unseen --out {PUB}/r10_unseen.json')
 BASE = f'--adaptive 1.0 --hybrid --verifier {PUB}/r10_verifier.json --cover --split_search --para 2 --k 16'
 EXTRA_FLAGS = {'final': '', 'final_correct': '--correct'}
 par(*[f'python -m eval.run_real --ckpt {R10} --split dev {BASE} {extra} --out {PRIV}/r10_dev_{name}.json'
@@ -79,9 +82,6 @@ par(*[f'python -m eval.run_real --ckpt {R10} --split dev {BASE} {extra} --out {P
 for name in EXTRA_FLAGS:
     sh(f'python -m eval.compare_runs {A_DEV} {PRIV}/r10_dev_{name}.json --out {PUB}/compare_{name}.json')
 '''), code('''
-par(f'python -m eval.gauntlet --ckpt {R10} --k 16 --out {PUB}/r10_gauntlet.json',
-    f'python -m eval.consistency --groups 300 --ckpt {R10} --k 16 --out {PUB}/r10_consistency.json && '
-    f'python -m eval.evaluate --ckpt {R10} --sets unseen --out {PUB}/r10_unseen.json')
 g, c = json.load(open(f'{PUB}/r10_gauntlet.json')), json.load(open(f'{PUB}/r10_consistency.json'))
 cmp = {n: json.load(open(f'{PUB}/compare_{n}.json')) for n in EXTRA_FLAGS}
 passing = [n for n in cmp if cmp[n]['adopt']]   # a config meeting the rule beats a bigger non-significant gain
