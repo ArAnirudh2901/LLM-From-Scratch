@@ -22,14 +22,14 @@ while true; do
   S=$(kaggle kernels status "$ID" 2>&1 | tr '[:upper:]' '[:lower:]' || true)
   echo "$(date +%H:%M) $S"
   case "$S" in
-    *complete*) break ;;
-    *error*|*cancel*) kaggle kernels output "$ID" -p "$WORK" >/dev/null 2>&1 || true
+    *kernelworkerstatus.complete*) break ;;
+    *kernelworkerstatus.error*|*kernelworkerstatus.cancel*) kaggle kernels output "$ID" -p "$WORK" >/dev/null 2>&1 || true
                       grep -ho 'STOP: [^"\\]*' "$WORK"/*.log 2>/dev/null | head -3
                       echo "STOP: Kaggle run of step $STEP ended with: $S (full log in $WORK)"; exit 1 ;;
-  esac
+  esac   # anything else (network blip) = poll again
   sleep 600
 done
-kaggle kernels output "$ID" -p "$WORK"
+for i in 1 2 3 4 5; do kaggle kernels output "$ID" -p "$WORK" && break; sleep 120; done
 LOG=$(ls "$WORK"/*.log 2>/dev/null | head -1 || true)
 if [ -n "$LOG" ] && grep -q 'STOP: ' "$LOG"; then
   grep -ho 'STOP: [^"\\]*' "$LOG" | head -3; echo "STOP: step $STEP stopped (full log in $LOG)"; exit 1

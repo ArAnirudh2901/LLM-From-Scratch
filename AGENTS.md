@@ -198,3 +198,4 @@ Mirrored the deterministic `generate_balanced_question_types.py` builder, its sp
   the >32-people drop in `reader.encode_example`, and the r9p Codex run-book (`TRAINING_V11_CODEX.md`, `colab/r9p/`).
   Data files stay in Kinthread-llm-model. All three repos now keep only `main`.
 - 2026-10-31 (r9p run): step D kept r8p; dev fair 73.9% -> 73.5% (13 wins / 16 losses, p=0.71); gauntlet 0.950 -> 0.962, consistency 0.940 -> 0.987; locked not run. Results in Kinthread-llm-model results/r9p/; next ideas in RESEARCH.md (2026-10-31).
+- 2026-10-31 (r10 run): gated attention + Canon + 5,224 correction rows; step D kept r8p; dev fair 73.9% -> 73.0% (10 wins / 17 losses, p=0.25); gauntlet 0.950 -> 0.964, consistency 0.940 -> 0.983; locked not run. Training now uses torch.compile by default (v10 blocks compiled in place). Results in Kinthread-llm-model results/r10/.

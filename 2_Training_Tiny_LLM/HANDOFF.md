@@ -322,3 +322,33 @@ does not use A's output); then B1, B2, D. Locked test (E) only after "approve lo
   6.5 h (trace + shadow), so B1/B2/D now run their two jobs on both T4s at once (`par()` in `build_notebooks.py`).
 - Reading: r9p is more robust to rewording (consistency +4.7 points, gauntlet +1.2) but not more accurate on real dev.
   The added balanced / detour data taught invariance, not new real wording. Next ideas: `RESEARCH.md` 2026-10-31.
+
+## r10 run (2026-10-31)
+
+r10 = r8p plus gated attention (one gate per head, zero-initialised) and Canon layers (K=4, zero-initialised), trained
+15,000 steps with 5,224 engine-feedback correction rows (r8p's own mistakes, re-read and checked by the engine).
+
+| Measure | r8p | r10 |
+| --- | --- | --- |
+| Real dev fair, FINAL setting | 528/714 = 73.9% | 521/714 = 73.0% |
+| Gain (points), wins / losses, McNemar p | | -0.98, 10 / 17, p=0.25 |
+| Same with `--correct` | | 521/714 = 73.0% (11 / 18, p=0.26) |
+| Gauntlet correct | 0.9495 | 0.964 |
+| Consistency, all variants agree | 0.9400 | 0.9833 |
+| Unseen synthetic set | | 0.9957 |
+| Locked test fair / verified | 68.8% / 72.2% (scored 2026-10-26) | not run |
+
+- Step D decision: adopt false (kept r8p). r10 checkpoint SHA-256:
+  e60625771b6d1323489d56121f628acb416d44dbf367b28309e6f1a000de9105
+- Quick dev in C (adaptive + hybrid): 521/714 = 73.0% (r9p 520/714 in the same setting); `--correct` 520/714.
+- Verifier with the new round-trip features (sentence coverage, family-role agreement): held-out 0.546, the same as
+  plain voting, so the features add nothing.
+- Problems: a DNS outage on the Mac stopped the local watcher at 15:49 (the word "error" in the network message was
+  read as a failed run); C had finished on Kaggle. `run_step.sh` now matches only Kaggle's own status strings and
+  retries the download. About 2.5 h lost; no GPU time lost.
+- Reading: r9p and r10 both raise robustness (gauntlet, consistency) and both lose about 1 point on real dev. Fine-tuning
+  r8p further, with more data or small architecture additions, no longer moves real dev. Real gains need a change in
+  how the reader reads (people roster / sentence-tag scratchpad) or a larger pretrain (`RESEARCH.md` 2026-10-31).
+- From now on training uses torch.compile by default (`--no-compile` turns it off). Before this, `--compile` did
+  nothing for v10 because the loss goes through `fact_logprobs`; the blocks are now compiled in place. Compiled and
+  eager log-probabilities differ by at most 1.4e-6 (fp32). Not yet run on a T4: smoke-test speed and loss first.

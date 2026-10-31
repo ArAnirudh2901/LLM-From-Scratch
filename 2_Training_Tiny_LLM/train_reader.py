@@ -253,7 +253,7 @@ def main():
     ap.add_argument('--save_every', type=int, default=500)
     ap.add_argument('--dev', type=int, default=1000)
     ap.add_argument('--amp', action='store_true', help='fp16 mixed precision on CUDA (weights stay fp32)')
-    ap.add_argument('--compile', action='store_true')
+    ap.add_argument('--compile', action=argparse.BooleanOptionalAction, default=True, help='torch.compile on CUDA; same math (--no-compile: eager)')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--cpu', action='store_true')
     ap.add_argument('--arch', default='v10', choices=['v10', 'gpt'], help='v10: RoPE, RMSNorm, SwiGLU, copy head')
@@ -357,7 +357,15 @@ def main():
             ema.load_state_dict(ck['model'])
         for p_ in ema.parameters():
             p_.requires_grad_(False)
-    body = torch.compile(model) if a.compile and device.type == 'cuda' else model
+    body = model
+    if a.compile and device.type == 'cuda':
+        import torch._dynamo
+        torch._dynamo.config.suppress_errors = True   # a graph that fails to compile runs eagerly
+        if cfg.get('arch') == 'v10':   # loss goes through fact_logprobs, not forward: compile blocks in place (state_dict keys unchanged)
+            for blk in model.blocks:
+                blk.compile(dynamic=True)
+        else:
+            body = torch.compile(model)
 
     clutrr = load_jsonl('data/clutrr_facts/train.jsonl.gz') if os.path.exists('data/clutrr_facts/train.jsonl.gz') else []
     dev = dev_set(a.dev)
