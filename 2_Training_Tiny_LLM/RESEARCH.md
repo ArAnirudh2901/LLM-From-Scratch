@@ -97,3 +97,54 @@ For Claude's improvement brainstorm, compare these concrete hypotheses before ch
 4. **Training value:** only after (1)–(3), use a small controlled fine-tune on a copied checkpoint and one data/recipe change at a time, with a fixed development suite spanning real exam wording, speech, stories, relation types, and lengths. Preserve all current weights and compare the same examples before/after.
 
 No architecture or training recipe can guarantee perfect accuracy. More examples, a larger output cap, extra reasoning steps, voting, or another optimizer should not be assumed to help without controlled, category-level development measurements. Do not inspect/tune against the locked test; no new locked-test result is authorized by this handoff.
+
+## 2026-10-31: thinking, recursion and architecture (third research pass)
+
+Where "thinking" happens here: the exact engine already does the reasoning, so a complex question is solved whenever
+the reading is right. Synthetic deep chains are ~99% and real dev is 73.9% fair, so the gap is reading unseen
+wording, not reasoning depth. A 40M own model will not become a general human-like reasoner; what transfers from
+reasoning research is how a careful human *reads*: list the people, read sentence by sentence, check, re-read.
+Earlier conclusions stand (coverage first; RL and voting only sharpen). Ranked for this project:
+
+1. **Read like a human: plan, align, check, revise** (needs one fine-tune, no architecture change).
+   - Scratchpad before facts: people roster with stated genders, then facts tagged by source sentence
+     (`s3: @1 mother @0`). Exact supervision comes free from the generator. *Protoreasoning in Tiny Transformers*
+     (2608.04980) shows ~1M-parameter models profit from simple step-by-step output.
+   - Engine feedback loop: the engine returns a contradiction, an unknown person or an open gender, and the reader
+     re-reads with that note (Logic-LM self-refinement; *LLMs as ASP Programmers: Self-Correction* 2604.27960;
+     *From Solver Feedback to Faithful Plans* 2608.21897). Extends `build_corrections.py` / `answer_corrected`.
+   - Round-trip check: render the chosen facts with `kinlogic/prose.py`, re-read, compare (*Faithful
+     Autoformalization via Roundtrip Verification and Repair* 2604.25031). Usable as a verifier feature.
+2. **Selection without retraining**: candidates' oracle coverage beats the chosen reading by ~6-7 points (r5). Verifier
+   features: per-sentence coverage from the tags above, copy-head grounding of every person, round-trip agreement.
+3. **More general pretraining** for wording: pre-v1/v2 saw ~161M unique tokens; a 40M model keeps improving well past
+   1B (MobileLLM, SmolLM2 over-training; Muennighoff 2023: up to ~4 repeats cost little; *Data-Constrained LM
+   Pretraining* 2606.06888 on regularisation when data repeats). ~2-3B tokens of FineWeb-Edu + kinship text is
+   ~8-10 T4x2 hours.
+4. **Cheap architecture changes** for the next pretrain (one A/B, both small in parameters):
+   - Canon layers (*Physics of LMs Part 4.1*, 2512.17351): short residual convolutions over neighbouring tokens at
+     several points in each block; reported large gains in reasoning depth and breadth for small models. In the
+     prefix-LM the question part may use a non-causal kernel.
+   - Gated attention (Qiu et al., NeurIPS 2025; *Hybrid Gated Attention* 2608.11805): sigmoid gate on each head's
+     output; removes attention sinks and helps long inputs (our 7+ person questions are weakest).
+   - Cost: `web/reader_engine.c` must implement both and re-pass the 50-prompt parity suite.
+   - Practitioner checks (2026-10-31): a from-scratch gated-attention reproduction at ~38M parameters (enwik8,
+     `pavansaipendry/gated-attention-repro`) found lower validation loss and no attention sink, at our size. Canon
+     layers now have a scale follow-up (*Part 4.2, Canon Layers at Scale*) with code in `facebookresearch/PhysicsLM4`.
+     modded-nanogpt records (2025-26) that also improve quality, not only speed: value embeddings, dense/MUDD
+     skip connections, token "smear" (a one-token mix much like a Canon layer), QK-norm, Muon (we have the last two).
+5. **Recursive / looped depth** (TRM 2510.04871: 7M parameters with deep supervision beats far larger models on
+   puzzles; 2026: *What Limits Recursive Reasoning Models* 2609.39967, *Towards Looped Models Done Right* 2610.23036,
+   *Looped Reasoning Finishes Earlier Than You Think* 2610.18174). Best fit for closed-family puzzles and long
+   coreference. The looped r5 was trained and never scored on real questions: score it on dev before building more.
+   Caution: a 1M-parameter language-modelling study of HRM/TRM-style recursion (W. Thurston, 2025) found the plain
+   transformer reached the lowest loss; recursion added compute without gains. TRM's wins are on fixed-size puzzle
+   grids, not text-to-sequence output.
+6. **Order-free decoding** (research bet): facts form a set under global constraints; masked diffusion and blackboard
+   decoders beat left-to-right on such problems and on repeated small data (2507.15857, 2609.38806, 2510.13117).
+   Needs a new decoder and a browser runtime; only after 1-4.
+7. RL stays last (Yue et al. 2025; our RL never beat SFT on full dev).
+
+Order of work: score looped r5 on dev (no training) -> verifier features (no training) -> one fine-tune with
+scratchpad + feedback rows -> pre-v3 (Canon + gated attention, 2-3B tokens) when Kaggle quota resets. Each step
+judged on full dev with the step-D rule; the locked test only once, with the owner's approval.

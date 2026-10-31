@@ -254,3 +254,71 @@ question text, kept on Kaggle and in `~/kaggle_r9p`). Decisions are computed, no
 gives the adopted answer flags, `eval/compare_runs.py` the dev adoption rule (>= 2 points, more wins than losses,
 McNemar p < 0.05), and step D adds the gauntlet and consistency checks into `decision.json`. Step E (locked test) runs
 only after the owner writes "approve locked". The old `colab/r9p_kaggle.ipynb` is replaced by `colab/r9p/C_train`.
+
+## 2026-10-29 — one branch per repo
+
+All work is on `main` in Kinthread-llm-model, Kinthread and LLM-From-Scratch. `v9-reader`, the claude/* branches and
+`kinship-qa-web` were merged (each fully contained in `main`) and are deleted on GitHub. LLM-From-Scratch
+`2_Training_Tiny_LLM` was synced from this repo (60 files, none diverged). Notebooks and the r9p run-book clone `main`.
+The answer-option tests now state the gender they need, so they pass without the name table.
+
+## 2026-10-29 — r9p run stopped at step A
+
+Pulled `origin/main`; local `HEAD` matched `2f7055e576ad4f40d89e164eb76b58e787786c35`. Uploaded the evaluation
+archive, selected `FINAL.json`/`verifier.json`, and the SHA-matched r8p checkpoint to the private Kaggle dataset
+`aranirudh/kinthread-real-questions`. Pushed step A as `aranirudh/kinthread-r9p-a-baseline`; Kaggle ended it with
+`KernelWorkerStatus.ERROR`. The kernel log reports `NameError: name 'REPO' is not defined` in `In [1]`. Per the
+run-book, stopped the run without retrying or changing notebook/runner code. No metrics or training checkpoint were
+produced; no `results/r9p/A/` output, commit, or push was made. The A kernel metadata account/dataset references
+were updated locally for this attempt and remain uncommitted.
+
+### r9p run report (stopped)
+
+| Measure | r8p | r9p |
+| --- | --- | --- |
+| Real dev fair, FINAL setting | Not run (A failed) | Not run |
+| Gain (points), wins / losses, McNemar p | — | Not run |
+| Dev fair with 192-token reading | Not run | Not run |
+| Gauntlet correct | Not run | Not run |
+| Consistency, all variants agree | Not run | Not run |
+| Locked test fair / verified | 68.8% / 72.2% (scored 2026-10-26) | Not run |
+
+- Flags adopted in step A: not run
+- Step D decision: not run
+- r9p checkpoint SHA-256: not produced
+- Largest exam-pattern gaps (A): not available
+- Most missed patterns (A): not available
+- Problems: step A — `KernelWorkerStatus.ERROR`; `NameError: name 'REPO' is not defined` in `In [1]`.
+
+## 2026-10-30 — r9p notebooks fixed, steps A and C started
+
+The `NameError` came from a truncated line in `colab/r9p/build_notebooks.py` (`REPO, X`; `BRANCH` was never defined),
+shared by all six notebooks. Fixed (`REPO, BRANCH = '/kaggle/temp/Kinthread-llm-model', 'main'`), notebooks regenerated,
+every notebook's code checked with pyflakes (no undefined names). The pipeline now runs under the owner's Kaggle account
+`aranirudh`: the r8p and final-selection notebooks belong to `anirudharavalli` and cannot be attached there, so the private
+dataset `aranirudh/kinthread-real-questions` holds `real_questions_full.tgz`, the SHA-checked r8p `best.pt`, `FINAL.json`
+and `verifier.json`; steps A, B1 and C attach only that dataset. Steps A and C (training) were pushed at the same time (C
+does not use A's output); then B1, B2, D. Locked test (E) only after "approve locked".
+
+## r9p run (2026-10-31)
+
+| Measure | r8p | r9p |
+| --- | --- | --- |
+| Real dev fair, FINAL setting | 528/714 = 73.9% | 525/714 = 73.5% |
+| Gain (points), wins / losses, McNemar p | | -0.42, 13 / 16, p=0.71 |
+| Dev fair with 192-token reading | 527/714 = 73.8% | 525/714 = 73.5% (config final_plus; 12 / 15, p=0.70) |
+| Gauntlet correct | 0.9495 | 0.9615 |
+| Consistency, all variants agree | 0.9400 | 0.9867 |
+| Locked test fair / verified | 68.8% / 72.2% (scored 2026-10-26) | not run |
+
+- Flags adopted in step A: none
+- Step D decision: adopt false (kept r8p), config final, extra flags none
+- r9p checkpoint SHA-256: 2aa1474a75a2acad6e852b1d9c2e89fa9041e81b76f420ef07969e3061c3b68b
+- Largest exam-pattern gaps (A): options <= 4 (real 66.8%, generated 16.4%); "how is X related to Y" (58.2% vs 24.4%);
+  kin word brother (48.1% vs 16.8%); single letters as names, 3+ (57.1% vs 26.3%); "only" (33.6% vs 9.1%)
+- Most missed patterns (A): single letters as names, 3+ (117 missed, 73%); father (113, 73%); options <= 4 (110, 78%);
+  son (102, 74%); daughter (102, 68%)
+- Problems: the first C run used pre-review code (fp16-overflow crash risk) and was deleted and restarted once; A took
+  6.5 h (trace + shadow), so B1/B2/D now run their two jobs on both T4s at once (`par()` in `build_notebooks.py`).
+- Reading: r9p is more robust to rewording (consistency +4.7 points, gauntlet +1.2) but not more accurate on real dev.
+  The added balanced / detour data taught invariance, not new real wording. Next ideas: `RESEARCH.md` 2026-10-31.
