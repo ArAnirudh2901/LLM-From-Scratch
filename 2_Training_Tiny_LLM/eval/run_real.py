@@ -201,6 +201,9 @@ if __name__ == '__main__':
     import kinlogic.exam as E
     E.COVER = E.COVER or a.cover
     E.CLOSURE, E.CORE_REPAIR, E.LEVER, E.TRACE_POW = a.closure, a.core_repair, a.lever, a.trace_pow
+    if a.correct:   # engine verdict -> re-read, after whatever gives the first answer (adaptive, looped)
+        first = fn or (lambda text: answer_adaptive(text, read, more, a.adaptive or 0.6) if more else answer(text, read))
+        fn = lambda text: answer_corrected(text, read, a.adaptive or 0.6, first=first)
     if a.para:   # self-consistency over surface forms: the same question with other names and code symbols
         import random
         import zlib

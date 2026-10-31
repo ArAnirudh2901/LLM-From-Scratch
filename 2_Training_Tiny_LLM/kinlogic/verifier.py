@@ -13,6 +13,28 @@ import re
 
 STATUS = ['unique', 'gender', 'conditional', 'ambiguous', 'assumed', 'side', 'unrelated', 'pair', 'claims']
 NONE = re.compile(r'none of|cannot be|can.?t be|data (?:is )?inadequate|insufficient', re.I)
+ROLE = {'father': 'line', 'mother': 'line', 'son': 'line', 'daughter': 'line', 'brother': 'sibling',   # 'son of' may be read as 'father'
+        'sister': 'sibling', 'husband': 'spouse', 'wife': 'spouse'}
+
+
+def coverage(toks, facts: str) -> tuple[float, float]:
+    """Round-trip checks a careful reader makes: share of sentences whose people all appear in the facts, and share of
+    the question's family roles (parent or child, sibling, spouse) that the facts use."""
+    used = set(re.findall(r'[@#]\d+', facts))
+    sents, cur = [], set()
+    for t in toks:
+        if re.fullmatch(r'@\d+', t):
+            cur.add(t)
+        if t in ('.', '?') and cur:
+            sents.append(cur)
+            cur = set()
+    if cur:
+        sents.append(cur)
+    words = set(facts.split())
+    asked = {ROLE[t] for t in toks if t in ROLE}
+    have = {ROLE[w] for w in words if w in ROLE}
+    return (sum(s <= used for s in sents) / len(sents) if sents else 1.0,
+            len(asked & have) / len(asked) if asked else 1.0)
 
 
 def features(p: dict, res: dict, score: float, top: float, share: float, rank: int, n: int) -> list[float]:
@@ -27,7 +49,7 @@ def features(p: dict, res: dict, score: float, top: float, share: float, rank: i
     return [1.0, score - top, share, rank / max(1, n), len(people - used), len(used & people) / max(1, len(people)),
             n_facts / sents, float('[relaxed' in facts), float(bool(NONE.search(opt or ''))),
             float(any(t == 'members' for t in facts.split())), float('means' in toks), float('"' in toks), len(toks) / 100.0,
-            *[float(st.startswith(s)) for s in STATUS]]
+            *[float(st.startswith(s)) for s in STATUS], *coverage(toks, facts)]   # new features last: older weights ignore them
 
 
 class Verifier:

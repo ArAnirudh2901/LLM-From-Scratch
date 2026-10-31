@@ -76,3 +76,43 @@ def test_ponder_loss_trains_the_exit_gate():
     assert torch.isfinite(loss) and m.exit_gate.weight.grad.abs().sum() > 0
     m.set_loops(1)
     assert len(m.passes()) == 2
+
+
+def test_gate_and_canon_start_as_the_plain_model():
+    torch.manual_seed(0)
+    plain = Reader(vocab_size=50, block_size=64, n_layer=2, n_head=2, n_embd=32, d_copy=16).eval()
+    new = Reader(vocab_size=50, block_size=64, n_layer=2, n_head=2, n_embd=32, d_copy=16, gate_attn=True, canon=True).eval()
+    missing = new.load_state_dict(plain.state_dict(), strict=False).missing_keys
+    assert missing and all('canon' in k or '.attn.g.' in k for k in missing)
+    idx = torch.randint(4, 50, (2, 10))
+    assert torch.equal(plain.hidden(idx), new.hidden(idx))
+
+
+def test_gate_and_canon_cached_decoding_matches_full_forward():
+    torch.manual_seed(1)
+    m = Reader(vocab_size=50, block_size=64, n_layer=2, n_head=2, n_embd=32, d_copy=16, gate_attn=True, canon=True,
+               prefix_lm=True).eval()
+    C = 3
+    m.c_id = C
+    with torch.no_grad():   # trained-looking modules, not the identity start
+        for n, p in m.named_parameters():
+            if 'canon' in n or '.attn.g.' in n:
+                p.normal_(0, 0.3)
+    qs = [[1, 7, 8, 9, 10, 8, C], [1, 9, C]]   # different prefix lengths: the decode cache is gathered per row
+    facts = [8, 11, 9, 12]
+    P = max(len(q) for q in qs)
+    pre = torch.zeros(2, P, dtype=torch.long)
+    for i, q in enumerate(qs):
+        pre[i, :len(q)] = torch.tensor(q)
+    plen = torch.tensor([len(q) for q in qs])
+    cache, lp = m.prefill(pre, plen)
+    got = [lp]
+    for g, t in enumerate(facts[:-1]):
+        got.append(m.step(cache, torch.tensor([t, t]), plen + g, plen, P, g + 1))
+    for i, q in enumerate(qs):
+        idx = torch.tensor([q + facts])
+        mask = torch.zeros_like(idx, dtype=torch.bool)
+        mask[0, len(q) - 1:len(q) - 1 + len(facts)] = True
+        full, _ = m.fact_logprobs(idx, mask, C)
+        dec = torch.stack([s[i] for s in got])
+        assert torch.allclose(dec, full, atol=1e-4), (i, (dec - full).abs().max())

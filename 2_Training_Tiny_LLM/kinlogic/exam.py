@@ -194,14 +194,15 @@ def with_draft(tokens, draft: str, verdict: str):
     return list(tokens) + ['draft', ':'] + draft.split() + ['check', ':', verdict]
 
 
-def answer_corrected(text: str, read, threshold: float = 0.6, priors: dict | None = None, rounds: int = 3) -> dict:
+def answer_corrected(text: str, read, threshold: float = 0.6, priors: dict | None = None, rounds: int = 3, first=None) -> dict:
     """Re-read and correct: when no family fits the readings or the winning option holds less than `threshold` of
     the vote, the reader reads again with its draft and the engine's verdict in view (a reader trained on
     build_corrections.py rows), up to `rounds` times, each round from the newest draft. Stops at the first confident
-    answer; else the most confident answer that fits (the first reading when none does)."""
+    answer; else the most confident answer that fits (the first reading when none does). `first(text)` gives the
+    first answer (e.g. answer_adaptive); default answer(text, read)."""
     fails = ('error', 'none', 'contradiction')
     main = prepare(text)['tokens']
-    cur = best = answer(text, read, priors)
+    cur = best = first(text) if first else answer(text, read, priors)
     seen = set()
     for _ in range(rounds):
         status = cur.get('status')

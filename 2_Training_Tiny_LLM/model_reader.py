@@ -28,13 +28,31 @@ def rope(x, cos, sin):
     return torch.stack((x1 * cos - x2 * sin, x1 * sin + x2 * cos), -1).flatten(-2)
 
 
+class Canon(nn.Module):
+    """Residual depthwise causal convolution over the last K tokens (Canon layers, Allen-Zhu 2025, Physics of LMs 4.1).
+    Zero weights: an exact identity, so a warm-started model starts unchanged."""
+    K = 4
+
+    def __init__(self, d: int):
+        super().__init__()
+        self.w = nn.Parameter(torch.zeros(self.K, d))   # w[j] weighs the token j steps back
+
+    def forward(self, x, past=None):
+        """x (B, T, d); past (B, K-1, d): the K-1 inputs before x (zeros at the start). Returns (y, new past)."""
+        xx = torch.cat([past if past is not None else x.new_zeros(x.size(0), self.K - 1, x.size(2)), x], 1)
+        T = x.size(1)
+        y = x + sum(self.w[j] * xx[:, self.K - 1 - j:self.K - 1 - j + T] for j in range(self.K))
+        return y, xx[:, -(self.K - 1):]
+
+
 class Attention(nn.Module):
-    def __init__(self, d: int, n_head: int, dropout: float, qk_norm: bool = False):
+    def __init__(self, d: int, n_head: int, dropout: float, qk_norm: bool = False, gate: bool = False):
         super().__init__()
         self.n_head, self.d_head, self.dropout = n_head, d // n_head, dropout
         self.qkv = nn.Linear(d, 3 * d, bias=False)
         self.proj = nn.Linear(d, d, bias=False)
         self.q_norm, self.k_norm = (RMSNorm(self.d_head), RMSNorm(self.d_head)) if qk_norm else (None, None)   # OLMo 2 / Qwen3: bounded attention logits
+        self.g = nn.Linear(d, n_head) if gate else None   # head-wise output gate (Qiu et al. 2025); zeroed by Reader: 2*sigmoid(0) = 1
 
     def heads(self, x, cos, sin):
         B, T, C = x.shape
@@ -49,7 +67,13 @@ class Attention(nn.Module):
         drop = self.dropout if self.training else 0.0
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=drop) if mask is None else \
             F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=drop)
-        return self.proj(y.transpose(1, 2).reshape(x.shape)), (k, v)
+        return self.out(y, x), (k, v)
+
+    def out(self, y, x):
+        """Heads y (B, H, T, dh) -> output; x is the attention input the gate reads."""
+        if self.g is not None:
+            y = y * (2 * torch.sigmoid(self.g(x))).transpose(1, 2)[..., None]
+        return self.proj(y.transpose(1, 2).reshape(x.shape))
 
 
 class SwiGLU(nn.Module):
@@ -65,16 +89,23 @@ class SwiGLU(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, d, n_head, hidden, dropout, qk_norm=False):
+    def __init__(self, d, n_head, hidden, dropout, qk_norm=False, gate=False, canon=False):
         super().__init__()
         self.ln1, self.ln2 = RMSNorm(d), RMSNorm(d)
-        self.attn = Attention(d, n_head, dropout, qk_norm)
+        self.attn = Attention(d, n_head, dropout, qk_norm, gate)
         self.ffn = SwiGLU(d, hidden, dropout)
+        self.canon_a, self.canon_c = (Canon(d), Canon(d)) if canon else (None, None)   # before attention / before the MLP
 
     def forward(self, x, cos, sin, mask=None):
-        a, kv = self.attn(self.ln1(x), cos, sin, mask)
+        """Returns (x, kv); with Canon layers kv also holds both Canon inputs (B, T, d) for the decode cache."""
+        h = self.ln1(x)
+        ha = self.canon_a(h)[0] if self.canon_a is not None else h
+        a, kv = self.attn(ha, cos, sin, mask)
         x = x + a
-        return x + self.ffn(self.ln2(x)), kv
+        h2 = self.ln2(x)
+        if self.canon_c is None:
+            return x + self.ffn(h2), kv
+        return x + self.ffn(self.canon_c(h2)[0]), (*kv, h, h2)
 
 
 class Reader(nn.Module):
@@ -82,7 +113,8 @@ class Reader(nn.Module):
 
     def __init__(self, vocab_size: int, block_size: int, n_layer: int = 6, n_head: int = 6, n_embd: int = 384,
                  dropout: float = 0.0, copy: bool = True, d_copy: int = 128, rope_base: float = 10000.0, arch='v10',
-                 n_loop: int = 1, qk_norm: bool = False, prefix_lm: bool = False):
+                 n_loop: int = 1, qk_norm: bool = False, prefix_lm: bool = False, gate_attn: bool = False,
+                 canon: bool = False):
         super().__init__()
         self.n_loop = n_loop   # looped reader: the whole stack runs n_loop times with shared weights (Universal Transformer)
         self.prefix_lm = prefix_lm   # the question attends both ways (prefix LM, T5/UL2); facts stay causal
@@ -91,7 +123,7 @@ class Reader(nn.Module):
         hidden = int(8 * n_embd / 3 + 63) // 64 * 64
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
         self.drop = nn.Dropout(dropout)
-        self.blocks = nn.ModuleList([Block(n_embd, n_head, hidden, dropout, qk_norm) for _ in range(n_layer)])
+        self.blocks = nn.ModuleList([Block(n_embd, n_head, hidden, dropout, qk_norm, gate_attn, canon) for _ in range(n_layer)])
         self.loop_emb = nn.Parameter(torch.zeros(n_loop, n_embd)) if n_loop > 1 else None   # which pass the shared blocks are on
         self.exit_gate = nn.Linear(n_embd, 1) if n_loop > 1 else None   # lambda_r: probability of stopping after loop r (PonderNet)
         self.loops_now = n_loop   # loops in use (set_loops): fewer while a loop curriculum ramps up, or to decode faster
@@ -112,6 +144,8 @@ class Reader(nn.Module):
         for n, p in self.named_parameters():   # residual projections start small (GPT-2 scaling)
             if n.endswith(('proj.weight', 'w2.weight')):
                 nn.init.normal_(p, 0.0, 0.02 / math.sqrt(2 * n_layer * n_loop))
+            elif '.attn.g.' in n:   # gate exactly 1 at the start: same function as without it
+                nn.init.zeros_(p)
 
     def attn_mask(self, idx):
         """None (causal) or, for a prefix LM, a (B, 1, T, T) mask: the question (up to '<c>') sees all of itself."""
@@ -245,6 +279,10 @@ class Reader(nn.Module):
             if first and self.loop_emb is not None:
                 x = self._loop_in(x, r)
             x, kv = blk(x, cos, sin, am)
+            if len(kv) > 2:   # Canon: the K-1 inputs before each row's first written token (positions plen-K+1..plen-1)
+                at = plen[:, None] + torch.arange(Canon.K - 1, device=idx.device)[None, :]
+                pad = lambda t: torch.cat([t.new_zeros(B, Canon.K - 1, t.size(2)), t], 1)
+                kv = (*kv[:2], *(pad(t)[torch.arange(B, device=idx.device)[:, None], at] for t in kv[2:]))
             cache.append(list(kv))
         h = self.ln_f(x)
         rows = torch.arange(B, device=idx.device)
@@ -272,12 +310,18 @@ class Reader(nn.Module):
         for li, (blk, r, first) in enumerate(self.passes()):
             if first and self.loop_emb is not None:
                 x = self._loop_in(x, r)
-            q, k, v = blk.attn.heads(blk.ln1(x), cos, sin)
+            h = blk.ln1(x)
+            if blk.canon_a is not None:
+                h, cache[li][2] = blk.canon_a(h, cache[li][2])
+            q, k, v = blk.attn.heads(h, cos, sin)
             cache[li][0] = torch.cat([cache[li][0], k], 2)
             cache[li][1] = torch.cat([cache[li][1], v], 2)
             y = F.scaled_dot_product_attention(q, cache[li][0], cache[li][1], attn_mask=mask)
-            x = x + blk.attn.proj(y.transpose(1, 2).reshape(x.shape))
-            x = x + blk.ffn(blk.ln2(x))
+            x = x + blk.attn.out(y, h)
+            h2 = blk.ln2(x)
+            if blk.canon_c is not None:
+                h2, cache[li][3] = blk.canon_c(h2, cache[li][3])
+            x = x + blk.ffn(h2)
         return self._step_logp(self.ln_f(x)[:, 0], cache, plen, P)
 
 

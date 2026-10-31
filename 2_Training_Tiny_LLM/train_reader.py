@@ -269,6 +269,8 @@ def main():
     ap.add_argument('--grad_loops', type=int, default=0, help='looped reader: gradients through the last N loops only (truncated backprop; 0: all)')
     ap.add_argument('--neftune', type=float, default=0.0, help='noise on input embeddings while training (NEFTune; 5 is the paper default)')
     ap.add_argument('--optim', default='adamw', choices=['adamw', 'muon'], help='muon: NorMuon + cautious weight decay for hidden matrices (optim_muon.py; same lr as AdamW); use it for a model pretrained with it')
+    ap.add_argument('--gate_attn', action='store_true', help='head-wise sigmoid gate on attention outputs (Qiu et al. 2025); starts as identity, so it can be added to a warm start')
+    ap.add_argument('--canon', action='store_true', help='Canon layers before attention and MLP (Allen-Zhu 2025); start as identity, so they can be added to a warm start')
     ap.add_argument('--qk_norm', action='store_true', help='RMSNorm on queries and keys (new models only: changes a warm-started one)')
     ap.add_argument('--llrd', type=float, default=1.0, help='layer-wise learning-rate decay: block i gets lr * llrd^(top - i); keeps pretrained features (LP-FT)')
     ap.add_argument('--ema', type=float, default=0.999, help='decay of the averaged weights used to evaluate and save (0: off)')
@@ -307,6 +309,9 @@ def main():
         cfg = {**cfg, 'qk_norm': True}
     if a.prefix_lm and not ck:
         cfg = {**cfg, 'prefix_lm': True}
+    for f in ('gate_attn', 'canon'):
+        if getattr(a, f) and not ck:
+            cfg = {**cfg, f: True}
     model = make_model(cfg).to(device)
     model.c_id = vocab.stoi['<c>']
     if ck:
@@ -327,7 +332,7 @@ def main():
     for n, p_ in model.named_parameters():   # layer-wise learning-rate decay: lower layers move less
         m = re.match(r'blocks\.(\d+)\.', n)
         sc = a.llrd ** (nb - 1 - int(m.group(1))) if m else a.llrd ** nb if n.startswith('tok_emb') else 1.0
-        muon = a.optim == 'muon' and n.startswith('blocks.') and p_.ndim == 2
+        muon = a.optim == 'muon' and n.startswith('blocks.') and p_.ndim == 2 and 'canon' not in n and '.attn.g.' not in n   # 4xd conv taps, 6xd gates: AdamW
         groups.setdefault((sc, muon), []).append(p_)
     if a.optim == 'muon':
         from optim_muon import Muon

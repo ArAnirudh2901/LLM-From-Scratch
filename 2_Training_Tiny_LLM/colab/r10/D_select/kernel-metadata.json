@@ -1,0 +1,19 @@
+{
+ "id": "aranirudh/kinthread-r10-d-select",
+ "title": "kinthread-r10-d-select",
+ "code_file": "notebook.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": true,
+ "enable_gpu": true,
+ "enable_internet": true,
+ "dataset_sources": [
+  "aranirudh/kinthread-real-questions"
+ ],
+ "kernel_sources": [
+  "aranirudh/kinthread-r9p-a-baseline",
+  "aranirudh/kinthread-r9p-b1-suites-r8p",
+  "aranirudh/kinthread-r10-c-train"
+ ],
+ "competition_sources": []
+}

@@ -216,7 +216,7 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
         if sample:   # k independent samples per question
             rows = rows.repeat_interleave(k)
         hyps = [(int(r), [], 0.0, 0) for r in rows.tolist()]   # (question, written, log-prob, tokens)
-        cache = [[kv[0][rows], kv[1][rows]] for kv in cache]
+        cache = [[t[rows] for t in kv] for kv in cache]
         logits, plen_h = logits[rows], plen[rows]
         done = [[] for _ in chunk]
         spare = [[] for _ in chunk]   # finished readings `check` rejected
@@ -260,7 +260,7 @@ def generate(model, vocab: Vocab, inputs: list[list[str]], device, k: int = 1, s
             if not nxt_hyps:
                 break
             pidx = torch.tensor(parents, device=device)
-            cache = [[kv[0][pidx], kv[1][pidx]] for kv in cache]
+            cache = [[t[pidx] for t in kv] for kv in cache]
             plen_h = plen_h[pidx]
             hyps = nxt_hyps
             logits = _step(model, cache, torch.tensor(toks, device=device), plen_h + step, plen_h, P, step + 1)
