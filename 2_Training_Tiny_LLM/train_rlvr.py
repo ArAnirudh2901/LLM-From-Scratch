@@ -117,7 +117,8 @@ def main():
     vocab, cfg = Vocab.from_ck(ck), ck['config']
     policy = make_model(cfg).to(device)
     policy.load_state_dict(ck['model'])
-    policy.c_id = vocab.stoi['<c>']
+    from kinlogic.facts import FOCUS
+    policy.c_id, policy.f_id = vocab.stoi['<c>'], vocab.stoi.get(FOCUS)
     ref = copy.deepcopy(policy).eval()
     for p_ in ref.parameters():
         p_.requires_grad_(False)

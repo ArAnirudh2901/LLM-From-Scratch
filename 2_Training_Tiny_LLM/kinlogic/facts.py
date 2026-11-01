@@ -46,6 +46,8 @@ RELS = [*KIN, *sorted(NONKIN)]
 NUMBERS = [str(n) for n in range(0, 21)]
 ENT_RE = re.compile(r'^[@#]\d+$')
 
+FOCUS = '<focus>'   # input only: the question, then FOCUS and the one sentence to read (build_focus.py)
+
 
 def is_ent(t: str) -> bool:
     return bool(ENT_RE.match(t))
@@ -316,14 +318,29 @@ def budget_filter(written: list[str], allowed: list[str], left: int, reserve: in
     return allowed
 
 
-def _allowed(written: list[str], ents: list[str]) -> list[str]:
-    n_new = 0
-    for t in written:
+def state(written: list[str]) -> tuple[tuple, int]:
+    """(statement being written, highest unnamed person so far): all the grammar needs of `written`."""
+    n_new, start = 0, 0
+    for i, t in enumerate(written):
         if t[0] == '#':
             n_new = max(n_new, int(t[1:]))
-    cur = []
-    for t in written:
-        cur = [] if t == ';' else cur + [t]
+        elif t == ';':
+            start = i + 1
+    return tuple(written[start:]), n_new
+
+
+def allowed_at(cur: tuple, n_new: int, ents: list[str]) -> list[str]:
+    """allowed_next from the grammar state (state()): the decoder keeps the state per reading, never rescanning."""
+    out = _allowed_state(list(cur), n_new, list(ents))
+    return out + ['<eos>'] if ';' in out else out
+
+
+def _allowed(written: list[str], ents: list[str]) -> list[str]:
+    cur, n_new = state(written)
+    return _allowed_state(list(cur), n_new, ents)
+
+
+def _allowed_state(cur: list[str], n_new: int, ents: list[str]) -> list[str]:
     people = ents + [f'#{k}' for k in range(1, n_new + 1)] + ([f'#{n_new + 1}'] if n_new < MAX_NEW else [])
     others = lambda x: [p for p in people if p != x]
     if not cur:

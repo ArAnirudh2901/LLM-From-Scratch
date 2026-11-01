@@ -50,11 +50,24 @@ def _deep_job(args):
     return fmt, d, out, tried, why
 
 
-def _kind_job(args):
-    kind, n, seed = args
-    from kinlogic import deep, generate as gen
+def engine_ok(ex) -> bool:
+    """The engine solves the question's facts and agrees with the answer the generator meant."""
+    from kinlogic import deep
     from kinlogic.engine import solve
     from kinlogic.facts import parse
+    st, bad = parse(ex['lf'])
+    r = solve(st, people=sorted({t for t in ex['tokens'] if t[0] == '@'}), max_steps=20000) if not bad else None
+    ok = r is not None and r['ok'] and (bool(r['questions']) or bool(r['claims']))
+    if ok and isinstance(ex.get('truth'), str) and r['questions'] and r['questions'][-1]['answers']:
+        q = r['questions'][-1]
+        got = {a.get('key') for a in q['answers']} | {a.get('base') for a in q['answers']} | {q.get('neutral')}
+        ok = ex['truth'] in got or q['status'] != 'unique' or deep._neutral(ex['truth']) in {deep._neutral(k) for k in got if k}
+    return ok
+
+
+def _kind_job(args):
+    kind, n, seed = args
+    from kinlogic import generate as gen
     rng = random.Random(seed)
     out, tried, why = [], 0, {}
     while len(out) < n and tried < n * 20:
@@ -63,14 +76,7 @@ def _kind_job(args):
         if ex is None:
             why['render'] = why.get('render', 0) + 1
             continue
-        st, bad = parse(ex['lf'])
-        r = solve(st, people=sorted({t for t in ex['tokens'] if t[0] == '@'}), max_steps=20000) if not bad else None
-        ok = r is not None and r['ok'] and (bool(r['questions']) or bool(r['claims']))
-        if ok and isinstance(ex.get('truth'), str) and r['questions'] and r['questions'][-1]['answers']:
-            q = r['questions'][-1]
-            got = {a.get('key') for a in q['answers']} | {a.get('base') for a in q['answers']} | {q.get('neutral')}
-            ok = ex['truth'] in got or q['status'] != 'unique' or deep._neutral(ex['truth']) in {deep._neutral(k) for k in got if k}
-        if not ok:
+        if not engine_ok(ex):
             why['engine'] = why.get('engine', 0) + 1
             continue
         out.append({k: ex.get(k) for k in FIELDS} | {'kind': kind, 'truth': ex['truth'] if isinstance(ex.get('truth'), str) else None})

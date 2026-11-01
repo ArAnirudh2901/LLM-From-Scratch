@@ -14,7 +14,7 @@ import re
 
 from .engine import alternatives, claim_holds, pair_holds, solve
 from .explain import explain, match_option
-from .facts import parse
+from .facts import FOCUS, parse
 from .kin import paths_of
 from .names import name_priors
 from .prepare import prepare
@@ -167,6 +167,7 @@ SMALLEST = os.environ.get('KIN_SMALLEST', '0') == '1'   # smallest family for ev
 CLOSURE = os.environ.get('KIN_CLOSURE', '0') == '1'   # "not related" with unnamed relatives: everyone named is one family
 CORE_REPAIR = os.environ.get('KIN_CORE_REPAIR', '0') == '1'   # every reading contradicts: drop one fact of a minimal conflict
 LEVER = os.environ.get('KIN_LEVER', '0') == '1'   # verifier probability times the reader's weight (LEVER), not instead of it
+KEEP_FIRST = os.environ.get('KIN_KEEP_FIRST', '0') == '1'   # adaptive re-read that fails (no family, nothing asked) keeps the first answer
 TRACE_POW = float(os.environ.get('KIN_TRACE_POW', '0'))   # vote weight times traceability ** TRACE_POW (0: off)
 
 
@@ -186,7 +187,8 @@ def answer_adaptive(text: str, read, read_more, threshold: float = 0.6, priors: 
     if first.get('status') not in ('error', 'none', 'contradiction') and first.get('confidence', 1.0) >= threshold:
         return first
     second = answer(text, read_more, priors)
-    return second if second.get('status') not in ('error',) else first
+    bad = ('error', 'none', 'contradiction') if KEEP_FIRST else ('error',)
+    return second if second.get('status') not in bad else first
 
 
 def with_draft(tokens, draft: str, verdict: str):
@@ -229,6 +231,9 @@ def _verifier():
     return _VERIFIER[0]
 
 
+_SOLVED = {}   # (question, reading) -> engine result: batched rounds (eval/batched.py) re-run questions
+
+
 def candidates(text: str, read, priors: dict | None = None):
     """(prepared question, [(engine result, reader score)]) for every reading."""
     from .codes import with_codes
@@ -236,16 +241,25 @@ def candidates(text: str, read, priors: dict | None = None):
     read = with_codes(read, p)   # coded questions are read exactly; the model reads the rest
     got = read([p['tokens']])[0]
     readings = [(got, 0.0)] if isinstance(got, str) else [(g, 0.0) if isinstance(g, str) else (g[0], g[1]) for g in got]
-    results = []
+    results = []   # the same reading from several readers (whole, sentence search, simplified) is solved once
+    solved = _SOLVED if priors is None else {}
+    flags = (NAMES_DECIDE, NEAREST, INVERSE, RELAX, DESC_UNNAMED, SMALLEST, CLOSURE)   # what solving one reading reads
     for k, (lf, score) in enumerate(readings):
-        try:
-            res = _answer_one(p, lf, read, priors)
-            if CLOSURE:
-                res = _closure(p, lf, read, priors, res)
-        except Exception as e:   # one bad reading drops out of the vote, not the whole question
-            res = {'answer': 'error', 'option': None, 'status': 'error', 'explanation': f'{type(e).__name__}: {e}', 'facts': lf}
+        lf = (text, lf, flags)
+        if lf not in solved:
+            f = lf[1]
+            try:
+                res = _answer_one(p, f, read, priors)
+                if CLOSURE:
+                    res = _closure(p, f, read, priors, res)
+            except Exception as e:   # one bad reading drops out of the vote, not the whole question
+                res = {'answer': 'error', 'option': None, 'status': 'error', 'explanation': f'{type(e).__name__}: {e}', 'facts': f}
+            res['trace'] = traceability(p, f)
+            if len(solved) >= 100_000:
+                solved.clear()
+            solved[lf] = res
+        res = dict(solved[lf])   # top-level keys only are set per reading
         res['reading'] = k
-        res['trace'] = traceability(p, lf)
         results.append((res, score))
     return p, results
 
@@ -786,22 +800,44 @@ def _readings(got):
     return [(g, 0.0) if isinstance(g, str) else (g[0], g[1]) for g in got or []]
 
 
-def with_split_search(read, k: int = 3, beam: int = 4, min_sentences: int = 3):
+def focus_input(tokens, sentence) -> list[str]:
+    """Whole question, then the one sentence to read (build_focus.py rows; with_split_search(focus=True))."""
+    return list(tokens) + [FOCUS] + list(sentence)
+
+
+_CONSISTENT = {}   # partial readings -> some family fits; beams and re-reads repeat the same ones
+
+
+def with_split_search(read, k: int = 3, beam: int = 4, min_sentences: int = 3, focus: bool = False, fits=None, base=None):
     """Sentence-level beam search checked by the engine (as SentBS and execution-guided decoding): each statement
     sentence is read on its own (k readings), sentences are joined in order keeping the `beam` most likely joins the
     engine finds consistent, and those whole readings join the vote. A misread sentence usually contradicts the others,
-    so the engine picks which reading of it fits."""
-    def consistent(facts):
-        try:
-            stmts, _ = parse(' ; '.join(f for f in facts if f.split()[0] not in WHOLE))
-            return bool(stmts) is False or solve(stmts).get('ok', True)
-        except Exception:
-            return True
+    so the engine picks which reading of it fits. focus: each sentence read with the whole question in view
+    (focus_input; needs a reader trained on build_focus.py rows), not just the sentence and the question; the question
+    sentence then counts as one more sentence, its own facts kept ("If C is the husband of B, how is C ...").
+    fits(tokens): whether one sentence read fits the reader with room to write; a question where one does not, or
+    where a sentence read finishes no reading, is left to the other readings (never cut, never joined without it).
+    base: reader for the sentence reads (default `read`), so stacked searches do not search inside each other."""
+    base = base or read
 
-    def renumber(lf, n):
+    def consistent(facts):
+        key = ' ; '.join(f for f in facts if f.split()[0] not in WHOLE and f.split()[0] not in QFACTS)
+        got = _CONSISTENT.get(key)
+        if got is None:
+            try:
+                stmts, _ = parse(key)
+                got = bool(stmts) is False or bool(solve(stmts).get('ok', True))
+            except Exception:
+                got = True
+            if len(_CONSISTENT) >= 200_000:
+                _CONSISTENT.clear()
+            _CONSISTENT[key] = got
+        return got
+
+    def renumber(lf, n, keep_q=False):
         out, ren = [], {}
         for st in (x.split() for x in lf.split(';') if x.strip()):
-            if not st or st[0] in QFACTS:
+            if not st or (st[0] in QFACTS and not keep_q):
                 continue
             for i, t in enumerate(st):
                 if t[0] == '#':
@@ -812,6 +848,8 @@ def with_split_search(read, k: int = 3, beam: int = 4, min_sentences: int = 3):
             out.append(' '.join(st))
         return out, n
 
+    asks = lambda lf: any(x.split()[:1] and x.split()[0] in QFACTS for x in lf.split(';'))
+
     def run(batch):
         out = read(batch)
         for b, toks in enumerate(batch):
@@ -819,24 +857,33 @@ def with_split_search(read, k: int = 3, beam: int = 4, min_sentences: int = 3):
             if len(sents) < min_sentences or not any(t == '?' for t in sents[-1]):
                 continue
             q = sents[-1]
-            parts = read([s + q for s in sents[:-1]] + [q])
-            qr = _readings(parts[-1])
-            question = [x.strip() for x in (qr[0][0] if qr else '').split(';') if x.strip().split()[:1] and x.split()[0] in QFACTS]
+            inputs = [focus_input(toks, s) for s in sents] if focus else [s + q for s in sents[:-1]] + [q]
+            if fits and not all(fits(x) for x in inputs):
+                continue
+            parts = [_readings(g) for g in base(inputs)]
+            if any(not r or r[0][1] == float('-inf') for r in parts):   # a sentence read that finished nothing
+                continue
+            question = [x.strip() for x in parts[-1][0][0].split(';') if x.strip().split()[:1] and x.split()[0] in QFACTS]
             if not question:
                 continue
+            units = parts if focus else parts[:-1]
             beams = [([], 0.0, 0)]
-            for got in parts[:-1]:
-                opts = _readings(got)[:k] or [('', 0.0)]
+            for u, got in enumerate(units):
+                last = focus and u == len(units) - 1
+                opts = got[:k]
+                if last:   # the question sentence: readings that ask something, unnamed people numbered on
+                    opts = [o for o in opts if asks(o[0])] or opts[:1]
                 nxt = []
                 for facts, sc, n in beams:
                     for lf, s2 in opts:
-                        f2, n2 = renumber(lf, n)
+                        f2, n2 = renumber(lf, n, keep_q=last)
                         nxt.append((facts + f2, sc + s2, n2))
                 nxt.sort(key=lambda x: -x[1])
                 kept = [c for c in nxt[:beam * k] if consistent(c[0])][:beam]
                 beams = kept or nxt[:1]
             prev = out[b] if isinstance(out[b], list) else [(out[b], 0.0)]
-            extra = [(' ; '.join(list(dict.fromkeys(f)) + question), sc / max(1, len(parts) - 1)) for f, sc, _ in beams]
+            tail = [] if focus else question
+            extra = [(' ; '.join(list(dict.fromkeys(f)) + tail), sc / max(1, len(units))) for f, sc, _ in beams]
             out[b] = list(prev) + extra
         return out
     return run

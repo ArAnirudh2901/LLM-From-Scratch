@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 from kinlogic import generate
 from kinlogic.engine import solve
-from kinlogic.facts import format as fmt, parse
+from kinlogic.facts import FOCUS, format as fmt, parse
 from model_gpt import GPT  # noqa: F401
 from model_reader import make_model
 from qa_data import hidden_states
@@ -51,6 +51,11 @@ class Stream(IterableDataset):
                 yield enc
 
 
+def shares(pool) -> tuple[float, float]:
+    """(reworded, focus) shares of a batch that are really drawn: 0 for a band with no rows."""
+    return (pool.get('p_reworded', 0.0) if pool.get('reworded') else 0.0), (pool.get('p_focus', 0.0) if pool.get('focus') else 0.0)
+
+
 class PoolStream(IterableDataset):
     """Endless examples from the verified pool (build_dataset.py): generator kinds by their mix weights, deep chains
     with a curriculum (their share grows from p_deep[0] to p_deep[1] and the longest allowed chain from 4 to 12 links
@@ -70,6 +75,7 @@ class PoolStream(IterableDataset):
         kinds = [k for k in self.pool['kinds'] if self.pool['kinds'][k]]
         weights = [generate.MIX.get(k, 1) for k in kinds]
         depths = sorted(self.pool['deep'])
+        p_rew, p_foc = shares(self.pool)   # an empty file's band goes back to the pool, not to the next band
         n = 0
         while True:
             t = min(1.0, (self.start + n * nw) / max(1, self.total))
@@ -78,8 +84,10 @@ class PoolStream(IterableDataset):
                 ex = rng.choice(self.clutrr)
             elif self.authored and u < self.pc + self.pa:
                 ex = rng.choice(self.authored)
-            elif self.pool.get('reworded') and u < self.pc + self.pa + self.pool['p_reworded']:
+            elif p_rew and u < self.pc + self.pa + p_rew:
                 ex = rng.choice(self.pool['reworded'])
+            elif p_foc and u < self.pc + self.pa + p_rew + p_foc:
+                ex = rng.choice(self.pool['focus'])
             elif depths and rng.random() < self.p_deep[0] + (self.p_deep[1] - self.p_deep[0]) * t:
                 top = 4 + round(8 * t)
                 ds = [d for d in depths if d <= top]
@@ -88,7 +96,7 @@ class PoolStream(IterableDataset):
                 ex = rng.choice(self.pool['kinds'][rng.choices(kinds, weights)[0]])
             n += 1
             tokens, lf = (ex[0].split(' '), ex[1]) if isinstance(ex, tuple) else (ex['tokens'], ex['lf'])
-            if self.pool.get('style_p') and u >= self.pc + self.pa + self.pool.get('p_reworded', 0) and rng.random() < self.pool['style_p']:
+            if self.pool.get('style_p') and u >= self.pc + self.pa + p_rew + p_foc and rng.random() < self.pool['style_p']:
                 from boost_phrases import boost, restyle   # exam-style surface on the fly (phrase_audit.py); facts unchanged
                 got = restyle(list(tokens), lf, rng, married=False)
                 tokens = got[0] if got else tokens
@@ -279,6 +287,9 @@ def main():
     ap.add_argument('--ramp_steps', type=int, default=20000, help='steps by which every depth (up to 12) is in the mix')
     ap.add_argument('--reworded', default='data/reworded.jsonl.gz', help='extra verified rows, comma-separated files: rewrites (kinlogic/reword.py), STaR rows (star.py), minimal pairs')
     ap.add_argument('--p_reworded', type=float, default=0.15)
+    ap.add_argument('--focus', default='', help='focus rows for factored reading (build_focus.py)')
+    ap.add_argument('--p_focus', type=float, default=0.25)
+    ap.add_argument('--focus_mask', action='store_true', help="the question never sees the '<focus>' sentence, so one question's keys/values serve all its sentences at test time")
     ap.add_argument('--style_p', type=float, default=0.0, help='share of pool rows rewritten on the fly toward exam phrasing (boost_phrases.restyle/boost; facts unchanged)')
     ap.add_argument('--reworded_dev', default='data/reworded_dev.jsonl.gz', help='held-out rewrites (kinlogic/reword_merge.py): scored each evaluation')
     ap.add_argument('--w_reworded', type=float, default=0.4, help="weight of the held-out rewrites in the pick score (closest to real phrasing)")
@@ -296,11 +307,17 @@ def main():
     vocab = Vocab.from_ck(ck) if ck else Vocab.from_ck(pre) if pre else build_vocab(extra=(a.reworded or '').split(',')[0] or None)
     if pre and not ck:   # fact words the adopted vocabulary lacks ('singles', 'gen') get new rows
         from kinlogic.facts import vocabulary
-        missing = [t for t in vocabulary() if t != ';' and t not in vocab.stoi]
+        missing = [t for t in vocabulary() + ([FOCUS] if a.focus else []) if t != ';' and t not in vocab.stoi]
         if missing:
             vocab = Vocab(vocab.itos + missing, vocab.merges)
             pre = {**pre, 'config': {**pre['config'], 'vocab_size': len(vocab)}}
             print('vocabulary grown by', missing, flush=True)
+    elif a.focus and not ck and FOCUS not in vocab.stoi:
+        vocab = Vocab(vocab.itos + [FOCUS], vocab.merges)
+    if (a.focus or a.focus_mask) and FOCUS not in vocab.stoi:
+        raise SystemExit(f'{FOCUS} is not in the vocabulary (a resumed run cannot grow it): start without --resume')
+    if a.focus_mask and not (a.prefix_lm or (ck and ck['config'].get('prefix_lm'))):
+        raise SystemExit('--focus_mask needs --prefix_lm: a causal reader never sees the sentence after the question anyway')
     cfg = ck['config'] if ck else {**pre['config'], 'dropout': a.dropout, 'block_size': max(pre['config']['block_size'], a.block)} if pre else {'vocab_size': len(vocab), 'block_size': a.block, 'n_layer': a.n_layer, 'n_head': 6,
                                    'n_embd': 384, 'dropout': a.dropout, **({'arch': 'v10'} if a.arch == 'v10' else {})}
     if a.n_loop and not ck:
@@ -309,11 +326,11 @@ def main():
         cfg = {**cfg, 'qk_norm': True}
     if a.prefix_lm and not ck:
         cfg = {**cfg, 'prefix_lm': True}
-    for f in ('gate_attn', 'canon'):
+    for f in ('gate_attn', 'canon', 'focus_mask'):
         if getattr(a, f) and not ck:
             cfg = {**cfg, f: True}
     model = make_model(cfg).to(device)
-    model.c_id = vocab.stoi['<c>']
+    model.c_id, model.f_id = vocab.stoi['<c>'], vocab.stoi.get(FOCUS)
     if ck:
         model.load_state_dict(ck.get('raw') or ck['model'])
     elif a.init and os.path.exists(a.init):
@@ -389,6 +406,21 @@ def main():
     if pool and extra:
         pool['reworded'], pool['p_reworded'] = guard.clean([r for f, k in extra for r in load_jsonl(f) * k], 'extra files'), a.p_reworded
         print(f"reworded: {len(pool['reworded'])} verified rewrites at {a.p_reworded:.0%}", flush=True)
+    if a.focus:
+        if not pool:
+            raise SystemExit('--focus needs --pool (focus rows are a share of the pool stream)')
+        rows = load_jsonl(a.focus)   # the guard checks each source question, not the joined row (padding hides a copy)
+        src = lambda r: r.get('src') or [r['tokens'][:r['tokens'].index(FOCUS)] if FOCUS in r['tokens'] else r['tokens']]
+        keep = [r for r in rows if not (guard and any(guard.leaks(t) for t in src(r)))]
+        if len(keep) != len(rows):
+            print(f'leak guard: {len(rows) - len(keep)} focus rows dropped', flush=True)
+        pool['focus'], pool['p_focus'] = keep, a.p_focus
+    if pool:
+        p_rew, p_foc = shares(pool)
+        if a.p_clutrr + a.p_authored + p_rew + p_foc > 1.0:
+            raise SystemExit(f'batch shares add up to over 1: clutrr {a.p_clutrr} + authored {a.p_authored} + reworded {p_rew} + focus {p_foc}')
+        if a.focus:
+            print(f"focus: {len(pool['focus'])} sentence rows at {p_foc:.0%}; verified pool {1 - a.p_clutrr - a.p_authored - p_rew - p_foc:.0%}", flush=True)
     if pool is not None:
         pool['style_p'] = a.style_p
     if pool:
@@ -518,7 +550,9 @@ def main():
                 was = judge.training
                 judge.eval()
                 with torch.no_grad():
-                    sr, _ = run_real(lambda b: _gen(judge, vocab, b, device, k=4), real_dev)
+                    from eval.batched import Rounds
+                    R = Rounds(lambda b, **kw: _gen(judge, vocab, b, device, **kw), rows=256 if device.type == 'cuda' else 64)   # new per checkpoint
+                    sr, _ = run_real(lambda b: R(b, k=4), real_dev, rounds=R)
                 judge.train(was)
                 acc = sum(sr['ok']) / max(1, len(sr['ok']))
                 score = acc + 0.01 * score if a.select_real else score + a.w_real * acc

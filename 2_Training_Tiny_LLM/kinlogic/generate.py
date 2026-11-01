@@ -206,6 +206,8 @@ class Q:
         self.rng, self.fam = rng, fam
         self.names = names or Names(rng, style)
         self.refs, self.sentences, self.facts = {}, [], []
+        self.marks = []   # len(self.facts) after each sentence: facts written between sentences go with the next one
+        self.owner = {}   # fact index -> sentence index, where a fact is written after the sentence that states it
         self.gendered, self.descs = set(), []
         self.profs = {}   # Ref -> profession written in the text
 
@@ -253,6 +255,7 @@ class Q:
                 self.gendered.add(r)
                 self.facts.append(G(r, r.g))
         self.facts += list(facts)
+        self.marks.append(len(self.facts))
 
     def finish(self, kind: str, options=None, extra=None, noise=True) -> dict | None:
         rng = self.rng
@@ -303,9 +306,54 @@ class Q:
             out.append(g)
         ex = {'kind': kind, 'text': text, 'tokens': p['tokens'], 'lf': _format(out), 'ents': p['ents'],
               'names': {ids[r]: r.surface for r in ids if r.kind in ('name', 'letter')}}
+        units = _units(self.sentences, self.marks, out, p['tokens'], self.owner) if UNITS else None
+        if units:
+            ex['units'] = units
         if extra:
             ex.update(extra)
         return ex
+
+
+def _ends(s: str) -> int:
+    """Sentence ends in raw text, counted as exam._sentences counts them in tokens: '.' or '?' outside quotes."""
+    n, quoted = 0, False
+    for ch in s:
+        if ch in '"“”':
+            quoted = not quoted
+        elif ch in '.?' and not quoted:
+            n += 1
+    return n
+
+
+UNITS = False   # build_focus.py turns this on: each row then carries its sentences' facts ('units')
+
+
+def _units(sentences, marks, facts, tokens, owner=None):
+    """[start, end, facts] per sentence of the prepared question (exam._sentences), for focus rows (build_focus.py).
+    A written sentence that prepares into several is left out; one with no end joins the next. None when they do
+    not line up."""
+    from .exam import _sentences
+    if not marks or marks[-1] != len(facts):
+        return None
+    own, a = [[] for _ in sentences], 0
+    for i, b in enumerate(marks):
+        for j in range(a, b):
+            own[(owner or {}).get(j, i)].append(facts[j])
+        a = b
+    spans, i = [], 0
+    for t in _sentences(list(tokens)):
+        spans.append((i, i + len(t)))
+        i += len(t)
+    out, k, carry = [], 0, []
+    for s, fs in zip(sentences, own):
+        n = _ends(s)
+        if n == 0:
+            carry += fs
+            continue
+        if n == 1 and k < len(spans):
+            out.append([*spans[k], _format(carry + fs)])
+        k, carry = k + n, []
+    return out if k == len(spans) and not carry else None
 
 
 # ---------- sentence forms ----------
@@ -989,6 +1037,7 @@ def q_speech(rng, speech_mode: str | None = None) -> dict | None:
         ev = sorted(set(ev), key=order.index)
     sentence = open_.format(P=said.get(rp, rp.surface), S=said.get(rs, rs.surface), U=quote[0] + utter + quote[1])
     q.add(cap(sentence), side + (facts if not bare_photo else []), evidence=ev)
+    said_at = len(q.sentences) - 1
     if speech_mode is not None:
         # A named speaker's sex is not established by a name or by saying "my sister". State it explicitly when
         # the speech facts do not already do so; otherwise source-graph labels can overstate what the text entails.
@@ -1004,6 +1053,7 @@ def q_speech(rng, speech_mode: str | None = None) -> dict | None:
             ref_p = f'{ref_p} in the photograph'
     ref_s = q.say(rs) if rs.kind == 'desc' else rs.surface
     if bare_photo:   # facts come from the quote, which the reader links to the question's "the man"
+        q.owner.update((j, said_at) for j in range(len(q.facts), len(q.facts) + 1 + len(facts)))   # stated by the quote
         q.facts += [G(rp, rp.g)] + facts
         q.gendered.add(rp)
     near = [m for m in fam.people if m not in (s, p) and len(fam.hops(s, m)) == 1 and m not in q.refs]
@@ -1646,7 +1696,7 @@ def flip_pair(ex: dict, rng: random.Random) -> dict | None:
     a, b = answers(ex['lf'], people), answers(lf2, people)
     if b is None or a == b or 'contradiction' in str(b):
         return None
-    return {**ex, 'kind': ex['kind'] + '-pair', 'tokens': toks2, 'lf': lf2,
+    return {**{k: v for k, v in ex.items() if k != 'units'}, 'kind': ex['kind'] + '-pair', 'tokens': toks2, 'lf': lf2,   # units: old wording
             'text': re.sub(rf'\b{re.escape(w)}\b', FLIP[w], ex['text'], count=1)}
 
 

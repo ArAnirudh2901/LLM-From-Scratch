@@ -148,3 +148,67 @@ Earlier conclusions stand (coverage first; RL and voting only sharpen). Ranked f
 Order of work: score looped r5 on dev (no training) -> verifier features (no training) -> one fine-tune with
 scratchpad + feedback rows -> pre-v3 (Canon + gated attention, 2-3B tokens) when Kaggle quota resets. Each step
 judged on full dev with the step-D rule; the locked test only once, with the owner's approval.
+
+## 2026-11-01: why r8p misses, and the next big lever (fourth research pass)
+
+### Where r8p's 186 dev misses come from (fair items, from step A's trace)
+
+| Cause | Misses | Share |
+| --- | --- | --- |
+| Reading: no candidate reading right | 88 | 47% |
+| Selection: a right reading existed but lost the vote (usually a few of 240-500 candidates) | 47 | 25% |
+| Exact reader wrong (the model was wrong too in 30 of them) | 34 | 18% |
+| Scraped key disagrees with the checked key (r8p matches the checked key in 11) | 17 | 9% |
+
+- Puzzles are the weakest kind: 66/112 = 59% (statements 70%, speech 80%, coded 82%).
+  - 14 puzzles ask about professions or other attributes. The fact language cannot express these; r8p gets 5 of them right.
+  - Pure kinship puzzles: 61/98.
+- A sample of reading misses showed local slips: the rest of the puzzle was read right.
+  - a who-clause read in the wrong direction;
+  - a dropped negation ("X is not married to R" read as spouse);
+  - "has two sisters" read as "has 2 children";
+  - the couples count read wrong.
+  These sentences are easy alone; they fail inside long multi-sentence inputs.
+
+### Evidence from the literature
+
+- Sentence decomposition closes the gap between synthetic and natural questions. A parser trained only on synthetic
+  data gained +7.9 / +8.9 exact match when natural questions were first broken into simple sentences (Niu et al.,
+  TACL 2023, "Bridging the Gap between Synthetic and Natural Questions via Sentence Decomposition").
+- Iterative utterance segmentation: segment the input, parse the parts, compose. This beats whole-input parsing on long
+  inputs (Li et al., AAAI 2021, arXiv 2012.07019). Related: span-based parsing (Herzig & Berant 2021, 2009.06040),
+  least-to-most decomposition (Zhou et al. 2022, 2205.10625), ExeDec (2307.13883).
+- What makes compositional generalization hard is unseen local structures (Bogin et al. 2022, 2201.05899). A long
+  puzzle combines locally familiar sentences in unfamiliar ways; reading sentence by sentence keeps each unit familiar.
+- Model scale or a bigger pretrain helps compositional generalization in semantic parsing only modestly (Qiu et al.
+  2022, 2205.12253; Furrer et al. 2020). This is costly for us and not the first lever.
+- Diffusion and blackboard models beat autoregressive models on problems with global constraints (2609.38806,
+  2610.28543). In our system the exact engine already solves the global constraints, so this is not our bottleneck.
+- Error-driven synthesis: generate new training data around the small model's error patterns (S3, Wang et al. 2023,
+  2310.13671). Here that means patterns from the dev misses, never the dev items themselves.
+- Reasoning traces help tiny models generalize out of distribution, and their content matters, not just the extra
+  tokens (Protoreasoning in Tiny Transformers, 2026). This supports the roster / sentence-tag scratchpad.
+
+### Plan (ranked)
+
+1. **Factored reading.** Read each sentence separately, with the earlier sentences as context, and keep k candidate
+   readings per sentence. Search over combinations of sentence readings, and let the engine prune: the family must
+   exist, counts must match, and the asked people must be connected.
+   - Today one reading must get every sentence right at once. Factored reading multiplies coverage, and a single
+     slip no longer sinks the question.
+   - Names are already global placeholders, so sentence facts join without alignment work.
+   - Training rows: generated questions with each sentence's facts. Instrument `kinlogic/generate.py`, `deep.py` and
+     `prose.py` to record which facts each sentence states. Mix these rows with whole-question rows.
+   - Same model and size, so no new pretrain is needed.
+   - Test target: puzzle and statement dev; 59 reading misses are in reach.
+2. **Attribute facts** (profession and similar) in the fact language and the engine. Exact, no training; covers about
+   14 dev puzzles of a common exam type.
+3. **Error-pattern synthesis** in the generator for the slip types above: who-clause direction, negation inside
+   puzzles, "has N sisters/brothers", couple counts.
+4. Later: the people roster / sentence-tag scratchpad on top of factored reading; then a bigger pretrain with
+   multi-GPU training.
+
+Not pursued:
+- Re-ranking: worth at most 6.6 points, and the r10 verifier showed no gain.
+- Diffusion decoding: the global constraints are already solved exactly by the engine.
+- Test-time training on evaluation inputs: it breaks the evaluation-only rule.

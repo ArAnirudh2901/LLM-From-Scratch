@@ -373,7 +373,7 @@ def validate_row(ex: dict, fmt: str, expected: str):
         return None, 'options:gold-not-exactly-once'
     if fmt in ('direct_speech', 'indirect_speech') and expected == 'no_link' and not _options_match(prepared, {'label': 'No family link'}):
         return None, 'options:no-link-not-exactly-once'
-    out = dict(ex)
+    out = {k: v for k, v in ex.items() if k != 'units'}   # facts and tokens are replaced below
     out['format'] = fmt
     out['relation_type'] = expected
     out['lf'] = solved['lf']

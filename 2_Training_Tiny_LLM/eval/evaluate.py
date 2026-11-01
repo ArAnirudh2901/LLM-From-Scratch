@@ -35,6 +35,8 @@ def load(ckpt, device):
     model.eval()
     vocab = Vocab.from_ck(ck)
     model.c_id = vocab.stoi.get('<c>')   # prefix-LM readers need the end of the question
+    from kinlogic.facts import FOCUS
+    model.f_id = vocab.stoi.get(FOCUS)
     return model, vocab
 
 

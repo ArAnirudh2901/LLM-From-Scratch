@@ -127,6 +127,7 @@ def main():
     ap.add_argument('--reader', choices=('gold', 'exact', 'model'), default=None)
     ap.add_argument('--ckpt', default=None)
     ap.add_argument('--k', type=int, default=16)
+    ap.add_argument('--focus_search', action='store_true', help='also join sentence reads made in the whole question (exam.with_split_search focus=True), as run_real --focus_search')
     ap.add_argument('--cpu', action='store_true')
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
@@ -144,7 +145,14 @@ def main():
         from train import get_device
         dev = get_device(force_cpu=a.cpu)
         model, vocab = load_model(a.ckpt, dev)
-        fn = lambda text: exam.answer(text, lambda batch: generate(model, vocab, batch, dev, k=a.k))
+        from eval.batched import Rounds
+        R = Rounds(lambda b, **kw: generate(model, vocab, b, dev, **kw), rows=256 if dev.type == 'cuda' else 64)
+        read = lambda batch: R(batch, k=a.k)   # decoded in batches across questions (eval/batched.py)
+        if a.focus_search:
+            from reader import FOCUS_K, with_focus
+            read = with_focus(read, model, vocab, dev, base=lambda b: R(b, k=FOCUS_K))
+        use = rows
+        fn = R.memo(lambda text: exam.answer(text, read), [r['text'] for r in use] + [r['twin'] for r in use if r.get('twin')])
     elif mode == 'gold':
         lf = {r['text']: r['lf'] for r in rows if r['lf']}
         lf.update({r['twin']: r['lf'] for r in rows if r['lf'] and r.get('twin')})

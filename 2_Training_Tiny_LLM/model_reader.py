@@ -114,11 +114,13 @@ class Reader(nn.Module):
     def __init__(self, vocab_size: int, block_size: int, n_layer: int = 6, n_head: int = 6, n_embd: int = 384,
                  dropout: float = 0.0, copy: bool = True, d_copy: int = 128, rope_base: float = 10000.0, arch='v10',
                  n_loop: int = 1, qk_norm: bool = False, prefix_lm: bool = False, gate_attn: bool = False,
-                 canon: bool = False):
+                 canon: bool = False, focus_mask: bool = False):
         super().__init__()
         self.n_loop = n_loop   # looped reader: the whole stack runs n_loop times with shared weights (Universal Transformer)
         self.prefix_lm = prefix_lm   # the question attends both ways (prefix LM, T5/UL2); facts stay causal
         self.c_id = None   # id of '<c>' (end of the question); set by whoever loads the vocabulary
+        self.focus_mask = focus_mask   # the question before '<focus>' never sees the sentence after it (prefill_focus)
+        self.f_id = None   # id of '<focus>'; set with c_id
         self.block_size, self.copy, self.d_copy = block_size, copy, d_copy
         hidden = int(8 * n_embd / 3 + 63) // 64 * 64
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
@@ -155,7 +157,19 @@ class Reader(nn.Module):
         c = (idx == self.c_id).float().argmax(1)[:, None, None]
         pos = torch.arange(T, device=idx.device)
         i, j = pos[None, :, None], pos[None, None, :]
-        return ((j <= i) | ((j <= c) & (i <= c)))[:, None]
+        m = (j <= c) & (i <= c)
+        f = self._focus_at(idx)
+        if f is not None:
+            m = m & ((i >= f) | (j < f))
+        return ((j <= i) | m)[:, None]
+
+    def _focus_at(self, idx):
+        """(B, 1, 1) index of '<focus>' (T when absent), or None without focus_mask."""
+        if not self.focus_mask or self.f_id is None:
+            return None
+        hit = idx == self.f_id
+        T = torch.full_like(idx[:, 0], idx.size(1))
+        return torch.where(hit.any(1), hit.float().argmax(1).long(), T)[:, None, None]
 
     def passes(self):
         """(block, loop index, starts a loop) for every layer application, in order."""
@@ -272,9 +286,13 @@ class Reader(nn.Module):
         cache = []
         am = None
         if self.prefix_lm:   # the prompt is all question: every real position sees every other
-            real = torch.arange(P, device=idx.device)[None, :] < plen[:, None]
-            am = (real[:, None, :] & real[:, :, None]) | torch.eye(P, dtype=torch.bool, device=idx.device)[None]
-            am = am[:, None]
+            pos = torch.arange(P, device=idx.device)
+            real = pos[None, :] < plen[:, None]
+            am = real[:, None, :] & real[:, :, None]
+            f = self._focus_at(idx)
+            if f is not None:
+                am = am & ((pos[None, :, None] >= f) | (pos[None, None, :] < f))
+            am = (am | torch.eye(P, dtype=torch.bool, device=idx.device)[None])[:, None]
         for blk, r, first in self.passes():
             if first and self.loop_emb is not None:
                 x = self._loop_in(x, r)
@@ -289,6 +307,37 @@ class Reader(nn.Module):
         last = h[rows, plen - 1]
         cache.append([self.copy_k(h) if self.copy else h[..., :1], idx])
         return cache, self._step_logp(last, cache, plen, P)
+
+    def prefill_focus(self, q, f, flen):
+        """prefill for several sentences of one question at once (focus_mask): the question q (1, L), '<bos>' to just
+        before '<focus>', runs once and every row shares its keys/values; row r adds f[r] = '<focus>' sentence '<c>'
+        (n, S, right-padded; true lengths flen). Same result as prefill on the joined rows."""
+        assert self.focus_mask and all(b.canon_a is None for b in self.blocks), 'shared question needs focus_mask, no Canon'
+        n, S = f.shape
+        L, dev = q.size(1), f.device
+        xq, xf = self.tok_emb(q), self.tok_emb(f)
+        cq, sq, cf, sf = self.cos[:L], self.sin[:L], self.cos[L:L + S], self.sin[L:L + S]
+        real = torch.arange(S, device=dev)[None, :] < flen[:, None]
+        own = (real[:, None, :] & real[:, :, None]) | torch.eye(S, dtype=torch.bool, device=dev)[None]
+        am = torch.cat([torch.ones(n, S, L, dtype=torch.bool, device=dev), own], 2)[:, None]
+        qm = torch.ones(1, 1, L, L, dtype=torch.bool, device=dev)
+        cache = []
+        for blk, r, first in self.passes():
+            if first and self.loop_emb is not None:
+                xq, xf = self._loop_in(xq, r), self._loop_in(xf, r)
+            xq, (kq, vq) = blk(xq, cq, sq, qm)
+            h = blk.ln1(xf)
+            qh, kh, vh = blk.attn.heads(h, cf, sf)
+            k, v = torch.cat([kq.expand(n, -1, -1, -1), kh], 2), torch.cat([vq.expand(n, -1, -1, -1), vh], 2)
+            xf = xf + blk.attn.out(F.scaled_dot_product_attention(qh, k, v, attn_mask=am), h)
+            xf = xf + blk.ffn(blk.ln2(xf))
+            cache.append([k, v])
+        hq, hf = self.ln_f(xq), self.ln_f(xf)
+        keys = torch.cat([(self.copy_k(hq) if self.copy else hq[..., :1]).expand(n, -1, -1), self.copy_k(hf) if self.copy else hf[..., :1]], 1)
+        cache.append([keys, torch.cat([q.expand(n, -1), f], 1)])
+        plen = L + flen
+        last = hf[torch.arange(n, device=dev), flen - 1]
+        return cache, self._step_logp(last, cache, plen, L + S)
 
     def _step_logp(self, h, cache, plen, P):
         logp_v = torch.log_softmax(self.head(h).float(), -1)
