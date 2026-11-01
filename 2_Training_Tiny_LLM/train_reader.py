@@ -376,8 +376,8 @@ def main():
             p_.requires_grad_(False)
     body = model
     if a.compile and device.type == 'cuda':
-        import torch._dynamo
-        torch._dynamo.config.suppress_errors = True   # a graph that fails to compile runs eagerly
+        from torch import _dynamo   # not `import torch._dynamo`: that makes torch local to main
+        _dynamo.config.suppress_errors = True   # a graph that fails to compile runs eagerly
         if cfg.get('arch') == 'v10':   # loss goes through fact_logprobs, not forward: compile blocks in place (state_dict keys unchanged)
             for blk in model.blocks:
                 blk.compile(dynamic=True)
