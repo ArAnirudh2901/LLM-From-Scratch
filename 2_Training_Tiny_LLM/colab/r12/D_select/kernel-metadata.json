@@ -13,7 +13,7 @@
  "kernel_sources": [
   "aranirudh/kinthread-r9p-a-baseline",
   "aranirudh/kinthread-r9p-b1-suites-r8p",
-  "aranirudh/kinthread-r12-c-train"
+  "aranirudh/kinthread-r12-t-twins"
  ],
  "competition_sources": []
 }
