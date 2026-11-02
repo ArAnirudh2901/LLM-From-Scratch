@@ -57,6 +57,8 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     ck = torch.load(args.ckpt, map_location='cpu', weights_only=False)
     cfg = ck['config']
+    if cfg.get('genc'):
+        raise ValueError('readers with a grammar encoder (genc.py) have no browser export yet')
     if cfg.get('arch') != 'v10' or not cfg.get('qk_norm') or not cfg.get('prefix_lm'):
         raise ValueError('expected the selected v10 reader with QK normalization and prefix-LM enabled')
     if int(cfg['n_embd']) // int(cfg['n_head']) > 64:

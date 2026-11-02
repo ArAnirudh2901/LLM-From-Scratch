@@ -290,6 +290,11 @@ def main():
     ap.add_argument('--focus', default='', help='focus rows for factored reading (build_focus.py)')
     ap.add_argument('--p_focus', type=float, default=0.25)
     ap.add_argument('--focus_mask', action='store_true', help="the question never sees the '<focus>' sentence, so one question's keys/values serve all its sentences at test time")
+    ap.add_argument('--genc', default='', help="grammar encoder (genc.py), e.g. 'jhu-clsp/ettin-encoder-68m': a pretrained English encoder's view of the question, added through a zero-started projection")
+    ap.add_argument('--genc_layers', type=int, default=0, help='keep only the first N encoder layers (0: all)')
+    ap.add_argument('--genc_rev', default='', help='encoder revision (commit) to pin')
+    ap.add_argument('--genc_lr', type=float, default=5e-5, help='learning rate of the pretrained encoder (its projection uses --lr)')
+    ap.add_argument('--genc_freeze', type=int, default=1000, help='encoder frozen for the first N steps, while the projection learns to read it')
     ap.add_argument('--style_p', type=float, default=0.0, help='share of pool rows rewritten on the fly toward exam phrasing (boost_phrases.restyle/boost; facts unchanged)')
     ap.add_argument('--reworded_dev', default='data/reworded_dev.jsonl.gz', help='held-out rewrites (kinlogic/reword_merge.py): scored each evaluation')
     ap.add_argument('--w_reworded', type=float, default=0.4, help="weight of the held-out rewrites in the pick score (closest to real phrasing)")
@@ -329,12 +334,21 @@ def main():
     for f in ('gate_attn', 'canon', 'focus_mask'):
         if getattr(a, f) and not ck:
             cfg = {**cfg, f: True}
+    gstate = None
+    if a.genc and not ck and not cfg.get('genc'):
+        from genc import build
+        spec, gstate = build(a.genc, vocab.itos, a.genc_layers, a.genc_rev or None)
+        cfg = {**cfg, 'genc': spec}
     model = make_model(cfg).to(device)
     model.c_id, model.f_id = vocab.stoi['<c>'], vocab.stoi.get(FOCUS)
     if ck:
         model.load_state_dict(ck.get('raw') or ck['model'])
     elif a.init and os.path.exists(a.init):
         warm_start(model, vocab, a.init)
+        model.to(device)
+    if gstate:   # pretrained encoder weights; its projection stays at zero
+        got = model.genc.load_state_dict(gstate, strict=False)
+        assert not got.unexpected_keys and set(got.missing_keys) <= {'norm.weight', 'proj.weight', 'proj.bias'}, got
         model.to(device)
     print(f'{sum(p.numel() for p in model.parameters()) / 1e6:.1f}M parameters, vocab {len(vocab)}, device {device}', flush=True)
 
@@ -349,6 +363,8 @@ def main():
     for n, p_ in model.named_parameters():   # layer-wise learning-rate decay: lower layers move less
         m = re.match(r'blocks\.(\d+)\.', n)
         sc = a.llrd ** (nb - 1 - int(m.group(1))) if m else a.llrd ** nb if n.startswith('tok_emb') else 1.0
+        if n.startswith('genc.enc.'):   # pretrained: small steps keep its English
+            sc = a.genc_lr / a.lr
         muon = a.optim == 'muon' and n.startswith('blocks.') and p_.ndim == 2 and 'canon' not in n and '.attn.g.' not in n   # 4xd conv taps, 6xd gates: AdamW
         groups.setdefault((sc, muon), []).append(p_)
     if a.optim == 'muon':
@@ -482,6 +498,8 @@ def main():
         batch = next(it)
         for g in opt.param_groups:
             g['lr'] = lr_at(step) * g.get('scale', 1.0)
+        if getattr(model, 'genc', None) is not None:   # frozen (no gradients, no optimizer state) until genc_freeze
+            model.genc.enc.requires_grad_(step >= a.genc_freeze)
         cap = max((k for f, k in curriculum if f <= step / a.steps), default=getattr(model, 'n_loop', 1))   # grows with training (retrofitted recurrence)
         model.set_loops(loop_rng.randint(1, cap) if a.loop_random else cap) if getattr(model, 'n_loop', 1) > 1 else None
         opt.zero_grad(set_to_none=True)

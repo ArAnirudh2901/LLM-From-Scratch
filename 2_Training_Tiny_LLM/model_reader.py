@@ -114,7 +114,7 @@ class Reader(nn.Module):
     def __init__(self, vocab_size: int, block_size: int, n_layer: int = 6, n_head: int = 6, n_embd: int = 384,
                  dropout: float = 0.0, copy: bool = True, d_copy: int = 128, rope_base: float = 10000.0, arch='v10',
                  n_loop: int = 1, qk_norm: bool = False, prefix_lm: bool = False, gate_attn: bool = False,
-                 canon: bool = False, focus_mask: bool = False):
+                 canon: bool = False, focus_mask: bool = False, genc: dict | None = None):
         super().__init__()
         self.n_loop = n_loop   # looped reader: the whole stack runs n_loop times with shared weights (Universal Transformer)
         self.prefix_lm = prefix_lm   # the question attends both ways (prefix LM, T5/UL2); facts stay causal
@@ -148,6 +148,10 @@ class Reader(nn.Module):
                 nn.init.normal_(p, 0.0, 0.02 / math.sqrt(2 * n_layer * n_loop))
             elif '.attn.g.' in n:   # gate exactly 1 at the start: same function as without it
                 nn.init.zeros_(p)
+        self.genc = None   # grammar encoder (genc.py): built after the inits above, which would overwrite its weights
+        if genc:
+            from genc import GrammarEncoder
+            self.genc = GrammarEncoder(genc, n_embd)
 
     def attn_mask(self, idx):
         """None (causal) or, for a prefix LM, a (B, 1, T, T) mask: the question (up to '<c>') sees all of itself."""
@@ -186,8 +190,17 @@ class Reader(nn.Module):
     def set_loops(self, r: int):
         self.loops_now = max(1, min(int(r), self.n_loop))
 
+    def _genc_add(self, x, idx, n_pre=None):
+        """x plus the grammar encoder's view of the question (each row's first n_pre positions; default: through '<c>')."""
+        if self.genc is None:
+            return x
+        if n_pre is None:
+            assert self.c_id is not None, 'set c_id before using the grammar encoder'
+            n_pre = (idx == self.c_id).float().argmax(1) + 1
+        return x + self.genc(idx, n_pre).to(x.dtype)
+
     def _embed(self, idx):
-        x = self.tok_emb(idx)
+        x = self._genc_add(self.tok_emb(idx), idx)
         if self.training and self.neft:
             x = x + (torch.rand_like(x) * 2 - 1) * (self.neft / math.sqrt(idx.size(1) * x.size(-1)))
         return self.drop(x)
@@ -281,7 +294,7 @@ class Reader(nn.Module):
         """Keys/values of every layer for the prefixes, the copy keys (one extra cache entry) and the
         log-probabilities of the first fact token (at each row's last real position)."""
         B, P = idx.shape
-        x = self.tok_emb(idx)
+        x = self._genc_add(self.tok_emb(idx), idx, plen)
         cos, sin = self.cos[:P], self.sin[:P]
         cache = []
         am = None
@@ -313,6 +326,7 @@ class Reader(nn.Module):
         before '<focus>', runs once and every row shares its keys/values; row r adds f[r] = '<focus>' sentence '<c>'
         (n, S, right-padded; true lengths flen). Same result as prefill on the joined rows."""
         assert self.focus_mask and all(b.canon_a is None for b in self.blocks), 'shared question needs focus_mask, no Canon'
+        assert self.genc is None, 'the grammar encoder reads question and sentence together: no shared question'
         n, S = f.shape
         L, dev = q.size(1), f.device
         xq, xf = self.tok_emb(q), self.tok_emb(f)
