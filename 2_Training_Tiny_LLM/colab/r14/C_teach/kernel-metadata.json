@@ -1,0 +1,17 @@
+{
+ "id": "aranirudh/kinthread-r14-c-teach",
+ "title": "kinthread-r14-c-teach",
+ "code_file": "notebook.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": true,
+ "enable_gpu": true,
+ "enable_internet": true,
+ "dataset_sources": [
+  "aranirudh/kinthread-real-questions"
+ ],
+ "kernel_sources": [
+  "aranirudh/kinthread-r13-c-twins"
+ ],
+ "competition_sources": []
+}

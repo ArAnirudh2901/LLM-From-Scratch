@@ -1,0 +1,18 @@
+{
+ "id": "aranirudh/kinthread-r14-e-locked",
+ "title": "kinthread-r14-e-locked",
+ "code_file": "notebook.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": true,
+ "enable_gpu": true,
+ "enable_internet": true,
+ "dataset_sources": [
+  "aranirudh/kinthread-real-questions"
+ ],
+ "kernel_sources": [
+  "aranirudh/kinthread-r14-c-teach",
+  "aranirudh/kinthread-r14-d-select"
+ ],
+ "competition_sources": []
+}
