@@ -339,6 +339,15 @@ def traceability(p, lf) -> float | None:
     return round(sum(any(a in s and b in s for s in spans) for a, b in pairs) / len(pairs), 3)
 
 
+CLAIM_CUE = re.compile(r'\b(?:true|false|correct|incorrect|statements?|conclusions?|follows?|definitely|derived|inferred|sufficient|necessary|implies)\b')
+
+
+def _plain_question(p) -> bool:
+    """No options and no statements to judge ("Raju is Ashok's friend ... How is Ashok related to Sita?"). With options a
+    claim reading still picks one (dev: same score either way, so option questions keep the old vote)."""
+    return not p['options'] and not CLAIM_CUE.search(p['question'].lower())
+
+
 def _answer(text: str, read, priors: dict | None = None) -> dict:
     """read may return one reading per question or several, best first, optionally with scores (mean log-probability
     per token). Every reading is solved; readings that fail (contradiction, no question) drop out; the rest vote for
@@ -346,6 +355,12 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
     import math
     p, results = candidates(text, read, priors)
     good = [(r, sc) for r, sc in results if r['status'] not in ('error', 'contradiction', 'none')]
+    if good and _plain_question(p):   # "how is X related to Y?" has no statements to check: a claim reading is a misreading
+        kept = [(r, sc) for r, sc in good if r['status'] not in ('claims', 'sufficiency')]
+        if not kept:
+            return {'answer': 'no reading', 'option': None, 'status': 'none', 'confidence': 0.0, 'facts': good[0][0].get('facts', ''),
+                    'explanation': 'every reading checked statements this question does not have'}
+        good = kept
     if not good and CORE_REPAIR:
         good = _core_repair(p, results, read, priors)
     if not good:

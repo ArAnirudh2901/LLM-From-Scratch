@@ -219,6 +219,16 @@ def close_question(text: str) -> str:
     return t.rstrip('. ') + ' ?'
 
 
+def mark_question(text: str) -> str:
+    """'... sister of Raju How is Ashok related to Sita?': a capitalised question glued to the last sentence gets its full
+    stop, so the text reads the same with or without it. Not inside an 'If ...' sentence ('If A is B's son how is ...')."""
+    def stop(m):
+        start = max(text.rfind(c, 0, m.start()) for c in '.!?;:') + 1
+        if re.match(r'\s*(?:if|when|suppose|given)\b', text[start:], re.I):
+            return m.group(0)
+        return f'{m.group(1)}. {m.group(2)}'
+    return re.sub(r'([^\s.!?,;:])\s+((?:How|What|Who|Which) (?:is|are|was|were)\b)', stop, text)
+
 
 INFORMAL_KIN = [(r'\b(?:dad|daddy|papa)\b', 'father'), (r'\b(?:mom|mommy|mum|mummy)\b', 'mother'), (r'\bbro\b', 'brother'),
                 (r'\bsis\b', 'sister'), (r'\b(?:grandpa|granddad|grandad)\b', 'grandfather'), (r'\b(?:grandma|granny)\b', 'grandmother'),
@@ -258,7 +268,7 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
     Returns {tokens, ents: [{id, text, kind}], options, question}."""
     text = strip_boilerplate(normalize(informal(text)))
     text, options = split_options(text)
-    text = close_question(text)
+    text = mark_question(close_question(text))
     raw = []
     for t in TOKEN_RE.findall(text):   # "S-T" in a code expression is two letters, not one word
         if '-' in t and any(len(part) == 1 and part.isupper() for part in t.split('-')):
@@ -268,7 +278,9 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
             raw.append(t)
     starts = _sentence_starts(raw)
     extra = {n.strip().lower() for n in names or [] if n.strip()}
-    lowercase_text = not any(t[0].isupper() for t in raw if t[0].isalpha())
+    q0 = max((k + 1 for k, x in enumerate(raw[:-1]) if x in ('.', '!', '?')), default=0) if raw and raw[-1] == '?' else len(raw)
+    body = raw[:q0] if any(t[0].isalpha() for t in raw[:q0]) else raw   # one-sentence question: the whole text
+    lowercase_text = not any(t[0].isupper() for t in body if t[0].isalpha())   # the story's case; a typed "How is Ashok ...?" may be capitalised
     roman = 'IV' in raw
     letter_names = sum(1 for x in raw if re.fullmatch(r'[A-HJ-Z]', x)) >= 2
     ents, by_text, by_head = [], {}, {}

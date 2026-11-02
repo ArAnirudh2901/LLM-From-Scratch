@@ -18,6 +18,7 @@ NUM = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight'
 GWORD = {'male': 'male', 'man': 'male', 'boy': 'male', 'gentleman': 'male', 'female': 'female', 'woman': 'female',
          'girl': 'female', 'lady': 'female'}
 PLURAL = {'brothers': 'brother', 'sisters': 'sister', 'siblings': 'sibling', 'sons': 'son', 'daughters': 'daughter'}
+NONKIN = r'(friend|neighbour|colleague|classmate|roommate|teammate|acquaintance)'   # kin.NONKIN without 'partner' (may be a spouse)
 
 
 from .facts import PROFS as _P
@@ -50,6 +51,16 @@ def clause(c: str):
         or re.fullmatch(rf'{E} and {E} are (?:strangers|not related|unrelated)(?: to each other)?', c)
     if m:   # no family link at all
         return [f'{m.group(2)} stranger {m.group(1)}']
+    m = re.fullmatch(rf'{E} is (?:a |an |the )?(?:close |good |best |old )?{NONKIN} (?:of|to) {E}', c)
+    if m:   # a friend, colleague, neighbour ...: a link, but not family
+        return [f'{m.group(3)} {m.group(2)} {m.group(1)}']
+    m = re.fullmatch(rf'{E} and {E} are (?:close |good |best |old )?{NONKIN}s(?: of each other)?', c) \
+        or re.fullmatch(rf"{E} is {E} 's (?:close |good |best |old )?{NONKIN}", c)
+    if m:
+        return [f'{m.group(2)} {m.group(3)} {m.group(1)}']
+    m = re.fullmatch(rf"{E} 's (?:close |good |best |old )?{NONKIN} is {E}", c)
+    if m:
+        return [f'{m.group(1)} {m.group(2)} {m.group(3)}']
     m = re.fullmatch(rf'{E} is (?:the |a |an |also the )?{REL} (?:of|to) {E}(?: and (?:the |a |an )?{REL} of {E})?', c)
     if m:
         x, r1, y, r2, y2 = m.groups()
@@ -528,7 +539,7 @@ def read(tokens, why=None) -> str | None:
     text = re.sub(r"\b(\w+)(?:-| )in(?:-| )law\b", r'\1-in-law', text)
     text = re.sub(r" [‟’′`] s\b", " 's", text)
     text = re.sub(r"\b(does|do|is|has) n ' t\b|\b(does|do|is|has)n ' t\b", lambda m: (m.group(1) or m.group(2)) + ' not', text)
-    parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas )|\? ', text) if p.strip()]
+    parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas |[@#]\d+ (?:is|was) )|\? ', text) if p.strip()]   # "A is B's friend , C is ..."
     parts = [p for p in parts if not INSTRUCTION.match(p.strip())]   # "answer the questions based on the information given below"
     if parts:   # "..., then what is the relation of X with Y" / "how is X related to Y if Z has no siblings"
         last = parts[-1]
@@ -587,7 +598,7 @@ def read_partial(tokens) -> tuple[list[str], list[str], str | None]:
     text = re.sub(r"\b(\w+)(?:-| )in(?:-| )law\b", r'\1-in-law', text)
     text = re.sub(r" [‟’′`] s\b", " 's", text)
     text = re.sub(r"\b(does|do|is|has) n ' t\b|\b(does|do|is|has)n ' t\b", lambda m: (m.group(1) or m.group(2)) + ' not', text)
-    parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas )|\? ', text) if p.strip()]
+    parts = [p for p in re.split(r' [.;:] | , (?=and |while |whereas |[@#]\d+ (?:is|was) )|\? ', text) if p.strip()]   # "A is B's friend , C is ..."
     parts = [p for p in parts if not INSTRUCTION.match(p.strip())]   # "answer the questions based on the information given below"
     if parts:   # "..., then what is the relation of X with Y" / "how is X related to Y if Z has no siblings"
         last = parts[-1]
