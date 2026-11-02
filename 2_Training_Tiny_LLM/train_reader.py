@@ -102,6 +102,18 @@ class PoolStream(IterableDataset):
                 tokens = got[0] if got else tokens
                 if rng.random() < 0.4:
                     tokens = boost(list(tokens), rng) or tokens
+            if self.pool.get('cons_p') and u >= self.pc + self.pa + p_rew + p_foc and rng.random() < self.pool['cons_p']:
+                from twins import twin
+                tw = twin(list(tokens), rng)
+                if tw:   # the same entity numbers for both; no <unk> noise, so the facts match token for token
+                    s = rng.random()
+                    ea = encode_example(self.vocab, tokens, lf, self.block, random.Random(s), 0.0)
+                    eb = encode_example(self.vocab, tw, lf, self.block, random.Random(s), 0.0)
+                    if ea and eb and ea[0][ea[1]:] == eb[0][eb[1]:]:
+                        pid = (w.id if w else 0) * 10 ** 9 + n
+                        yield (*ea, pid)
+                        yield (*eb, pid)
+                        continue
             enc = encode_example(self.vocab, tokens, lf, self.block, rng, self.unk_p)
             if enc:
                 yield enc
@@ -143,6 +155,15 @@ def by_depth(rows, preds):
 
 def as_list(batch):
     return batch
+
+
+def twin_pairs(part) -> list[tuple[int, int]]:
+    """Row indices of twins both inside this part (a twin cut off by the batch edge is trained alone)."""
+    at = {}
+    for i, b in enumerate(part):
+        if len(b) > 2:
+            at.setdefault(b[2], []).append(i)
+    return [tuple(v) for v in at.values() if len(v) == 2]
 
 
 def load_jsonl(path, n=None):
@@ -295,6 +316,8 @@ def main():
     ap.add_argument('--genc_rev', default='', help='encoder revision (commit) to pin')
     ap.add_argument('--genc_lr', type=float, default=5e-5, help='learning rate of the pretrained encoder (its projection uses --lr)')
     ap.add_argument('--genc_freeze', type=int, default=1000, help='encoder frozen for the first N steps, while the projection learns to read it')
+    ap.add_argument('--cons_p', type=float, default=0.0, help='share of pool rows trained as twins (twins.py: reordered sentences, other sentence breaks; same facts) with a consistency loss')
+    ap.add_argument('--cons_w', type=float, default=0.5, help='weight of the twins\' symmetric KL')
     ap.add_argument('--style_p', type=float, default=0.0, help='share of pool rows rewritten on the fly toward exam phrasing (boost_phrases.restyle/boost; facts unchanged)')
     ap.add_argument('--reworded_dev', default='data/reworded_dev.jsonl.gz', help='held-out rewrites (kinlogic/reword_merge.py): scored each evaluation')
     ap.add_argument('--w_reworded', type=float, default=0.4, help="weight of the held-out rewrites in the pick score (closest to real phrasing)")
@@ -439,6 +462,7 @@ def main():
             print(f"focus: {len(pool['focus'])} sentence rows at {p_foc:.0%}; verified pool {1 - a.p_clutrr - a.p_authored - p_rew - p_foc:.0%}", flush=True)
     if pool is not None:
         pool['style_p'] = a.style_p
+        pool['cons_p'] = a.cons_p
     if pool:
         import hashlib
         sig = hashlib.sha1(''.join(r['lf'] for r in pool['dev'][:600] + rw_dev).encode()).hexdigest()[:12]
@@ -504,13 +528,16 @@ def main():
         model.set_loops(loop_rng.randint(1, cap) if a.loop_random else cap) if getattr(model, 'n_loop', 1) > 1 else None
         opt.zero_grad(set_to_none=True)
         while True:
-            parts = [batch[j::a.accum] for j in range(a.accum)] if a.accum > 1 else [batch]   # same batch, less memory per pass
+            k = -(-len(batch) // a.accum)   # same batch, less memory per pass; contiguous parts keep twins together
+            parts = [p for p in (batch[j * k:(j + 1) * k] for j in range(a.accum)) if p]
             try:
                 for part in parts:
                     idx, tgt, lm = collate(part, pad, device)
                     with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
-                        loss_f, loss_lm = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab)
-                        loss = (loss_f + a.lm_weight * loss_lm) / len(parts)
+                        pairs = twin_pairs(part) if a.cons_p else None
+                        out = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab, pairs=pairs)
+                        loss_f, loss_lm, cons = out if pairs is not None else (*out, None)
+                        loss = (loss_f + a.lm_weight * loss_lm + (a.cons_w * cons if cons is not None else 0)) / len(parts)
                     require_finite_loss(loss, step, loss_f, loss_lm)
                     scaler.scale(loss).backward()
                 break
@@ -538,7 +565,8 @@ def main():
         tl_sum, tl_n = tl_sum + loss_f.detach().float(), tl_n + 1
         if step % 100 == 0:
             el = time.time() - t0
-            print(f'step {step:6d} | facts {loss_f.item():.4f} | words {loss_lm.item():.3f} | lr {lr_at(step):.2e} | '
+            print(f'step {step:6d} | facts {loss_f.item():.4f} | words {loss_lm.item():.3f} | '
+                  + (f'twins {cons.item():.4f} | ' if cons is not None else '') + f'lr {lr_at(step):.2e} | '
                   f'{seen / el:.0f} q/s | {el / 60:.1f} min', flush=True)
         if step % a.save_every == 0:
             save(latest)

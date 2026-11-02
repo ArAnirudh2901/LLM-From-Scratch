@@ -127,16 +127,16 @@ def encode_example(vocab: Vocab, tokens, lf, block: int, rng: random.Random | No
 
 def collate(batch, pad: int, device, mult: int = 16):
     """Padded ids, fact targets (after <c>) and story targets (before it)."""
-    T = max(len(ids) for ids, _ in batch)
+    T = max(len(b[0]) for b in batch)
     T = (T + mult - 1) // mult * mult
     idx = torch.full((len(batch), T), pad, dtype=torch.long)
-    for i, (ids, _) in enumerate(batch):
+    for i, (ids, *_) in enumerate(batch):   # rows may carry a twin id (train_reader --cons_p)
         idx[i, :len(ids)] = torch.tensor(ids)
     nxt = torch.full_like(idx, -100)
     nxt[:, :-1] = idx[:, 1:]
     nxt[nxt == pad] = -100
     col = torch.arange(T)[None, :]
-    c = torch.tensor([c for _, c in batch])[:, None]
+    c = torch.tensor([b[1] for b in batch])[:, None]
     tgt = torch.where(col >= c, nxt, -100)          # the facts and <eos>
     lm = torch.where((col >= 1) & (col < c - 1), nxt, -100)   # the question's words
     return idx.to(device), tgt.to(device), lm.to(device)
@@ -374,8 +374,10 @@ def decode(model, vocab: Vocab, inputs: list[list[str]], device, max_new: int = 
 PONDER_PRIOR, PONDER_BETA = 0.5, 0.01   # geometric prior on the stopping loop and its weight (PonderNet, Banino et al. 2021)
 
 
-def fact_losses(model, idx, tgt, lm, vocab):
-    """Mean cross-entropy of the facts (copy head included for v10) and of the question's words."""
+def fact_losses(model, idx, tgt, lm, vocab, pairs=None):
+    """Mean cross-entropy of the facts (copy head included for v10) and of the question's words; with `pairs` (row
+    indices of twins, v10) also their consistency loss, returned third."""
+    cons = torch.zeros((), device=idx.device)
     if getattr(model, 'arch', None) == 'v10' and getattr(model, 'loops_now', 1) > 1:   # looped reader: PonderNet loss
         mt = tgt != -100
         lps, lams, h = model.fact_logprobs_loops(idx, mt, vocab.stoi['<c>'])
@@ -393,6 +395,12 @@ def fact_losses(model, idx, tgt, lm, vocab):
         mt = tgt != -100
         lp, h = model.fact_logprobs(idx, mt, vocab.stoi['<c>'])
         loss_f = F.nll_loss(lp, tgt[mt])
+        if pairs:   # twins (same facts, another surface): their next-token distributions should match (symmetric KL)
+            rows = mt.nonzero()[:, 0]
+            ia = torch.cat([(rows == i).nonzero()[:, 0] for i, _ in pairs])
+            ib = torch.cat([(rows == j).nonzero()[:, 0] for _, j in pairs])
+            pa, pb = lp[ia], lp[ib]
+            cons = 0.5 * ((pa.exp() * (pa - pb)).sum(-1) + (pb.exp() * (pb - pa)).sum(-1)).mean()
     else:
         h = hidden_states(model, idx)
         mt = tgt != -100
@@ -401,7 +409,7 @@ def fact_losses(model, idx, tgt, lm, vocab):
     if getattr(model, 'prefix_lm', False):   # the question attends both ways: predicting its next word would be copying it
         ml = torch.zeros_like(ml)
     loss_lm = F.cross_entropy(model.head(h[ml]).float(), lm[ml]) if ml.any() else torch.zeros((), device=idx.device)
-    return loss_f, loss_lm
+    return (loss_f, loss_lm, cons) if pairs is not None else (loss_f, loss_lm)
 
 
 def fact_token_logprobs(model, idx, tgt, vocab):
