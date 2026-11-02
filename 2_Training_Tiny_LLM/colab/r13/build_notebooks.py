@@ -35,7 +35,7 @@ sh('PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python train_reader.py --ar
    f'--out {OUT} --pool {DATA} --init runs/v10-r8p-final/best.pt --prefix_lm --of_form --style_p 0.8 '
    '--steps 5000 --batch 64 --lr 1e-4 --warmup 300 --optim muon --amp --workers 2 --resume --compile '
    '--eval_every 1000 --save_every 1000 --reworded ' + ','.join(EXTRA) + ' --reworded_dev data/reworded_dev.jsonl.gz '
-   '--p_reworded 0.75 --block 512 --real_dev 575 --select_real --cons_p 0.4 --cons_w 0.5')
+   '--p_reworded 0.75 --block 512 --real_dev 575 --select_real --cons_p 0.5 --cons_w 0.5')
 '''), code('''
 sh(f'rm -f {OUT}/latest.pt')
 best = f'{OUT}/best.pt'

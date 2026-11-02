@@ -102,7 +102,8 @@ class PoolStream(IterableDataset):
                 tokens = got[0] if got else tokens
                 if rng.random() < 0.4:
                     tokens = boost(list(tokens), rng) or tokens
-            if self.pool.get('cons_p') and u >= self.pc + self.pa + p_rew + p_foc and rng.random() < self.pool['cons_p']:
+            focus_row = p_foc and self.pc + self.pa + p_rew <= u < self.pc + self.pa + p_rew + p_foc
+            if self.pool.get('cons_p') and not focus_row and rng.random() < self.pool['cons_p']:   # every band but focus rows (reworded rows are most of a batch)
                 from twins import twin
                 tw = twin(list(tokens), rng)
                 if tw:   # the same entity numbers for both; no <unk> noise, so the facts match token for token
@@ -537,6 +538,7 @@ def main():
                         pairs = twin_pairs(part) if a.cons_p else None
                         out = fact_losses(body if cfg.get('arch') != 'v10' else model, idx, tgt, lm, vocab, pairs=pairs)
                         loss_f, loss_lm, cons = out if pairs is not None else (*out, None)
+                        n_pairs = len(pairs or [])
                         loss = (loss_f + a.lm_weight * loss_lm + (a.cons_w * cons if cons is not None else 0)) / len(parts)
                     require_finite_loss(loss, step, loss_f, loss_lm)
                     scaler.scale(loss).backward()
@@ -566,7 +568,7 @@ def main():
         if step % 100 == 0:
             el = time.time() - t0
             print(f'step {step:6d} | facts {loss_f.item():.4f} | words {loss_lm.item():.3f} | '
-                  + (f'twins {cons.item():.4f} | ' if cons is not None else '') + f'lr {lr_at(step):.2e} | '
+                  + (f'twins {cons.item():.4f} ({n_pairs} pairs) | ' if cons is not None else '') + f'lr {lr_at(step):.2e} | '
                   f'{seen / el:.0f} q/s | {el / 60:.1f} min', flush=True)
         if step % a.save_every == 0:
             save(latest)
