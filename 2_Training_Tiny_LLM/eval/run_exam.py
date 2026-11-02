@@ -37,5 +37,6 @@ if __name__ == '__main__':
         ck = torch.load(sys.argv[1], map_location='cpu', weights_only=False)
         model = make_model(ck['config']).to(dev)
         model.load_state_dict(ck['model'])
-        vocab = Vocab(ck['vocab'])
+        vocab = Vocab.from_ck(ck)   # with the sub-word merges: rare words become pieces, not <unk>
+        model.c_id, model.f_id = vocab.stoi['<c>'], vocab.stoi.get('<focus>')
         run(lambda item: (lambda batch: decode(model, vocab, batch, dev)))

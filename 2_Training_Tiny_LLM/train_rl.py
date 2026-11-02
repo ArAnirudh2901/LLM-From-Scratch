@@ -84,6 +84,7 @@ def main():
     vocab, cfg = Vocab.from_ck(ck), ck['config']
     policy = make_model(cfg).to(device)
     policy.load_state_dict(ck['model'])   # the averaged (EMA) weights when the run kept them
+    policy.c_id, policy.f_id = vocab.stoi['<c>'], vocab.stoi.get('<focus>')   # without c_id a prefix LM trains causal
     ref = copy.deepcopy(policy).eval()
     for p_ in ref.parameters():
         p_.requires_grad_(False)

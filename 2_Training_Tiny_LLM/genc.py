@@ -82,12 +82,12 @@ def build(name: str, itos: list[str], layers: int = 0, revision: str | None = No
     tok = AutoTokenizer.from_pretrained(name, revision=revision)
     src = AutoModel.from_pretrained(name, revision=revision).float()
     cls, sep, mask, pad = tok.cls_token_id, tok.sep_token_id, tok.mask_token_id, tok.pad_token_id
-    fixed = {'<bos>': [cls], '<c>': [sep], '<focus>': [sep], '<unk>': [mask]}   # unknown word: the MLM's own blank
+    fixed = {'<bos>': [cls], '<c>': [sep], '<focus>': [sep], '<sep>': [sep], '<unk>': [mask]}   # unknown word: the MLM's own blank
     rows = []
     for t in itos:
         if t in fixed:
             rows.append(fixed[t])
-        elif t.startswith('<'):   # markers never inside a question (<pad>, <eos>, ...)
+        elif re.fullmatch(r'<[a-z_]+>', t):   # markers never inside a question (<pad>, <eos>, ...); a bare '<' is a code symbol
             rows.append([])
         else:
             s = _surface(t)
