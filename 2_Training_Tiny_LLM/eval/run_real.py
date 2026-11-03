@@ -128,6 +128,7 @@ if __name__ == '__main__':
     ap.add_argument('--cpu', action='store_true')
     ap.add_argument('--out', default=None)
     ap.add_argument('--limit', type=int, default=None, help='first N questions only (quick comparisons)')
+    ap.add_argument('--start', type=int, default=0, help='skip the first N questions (score a long split in fresh processes on a small machine)')
     ap.add_argument('--split', default=None, help="only 'dev' or 'test' questions, or 'locked2' (eval.locked: scored once)")
     ap.add_argument('--rescore_reason', default=None, help='locked2 again: why (a new model selected on dev)')
     ap.add_argument('--pattern', default='data/real_questions/*.jsonl', help='question files (data/fresh_online/*.jsonl: questions scraped after training)')
@@ -176,7 +177,7 @@ if __name__ == '__main__':
         if not rows or len(rows) != len(locked):   # never spend the one locked score on a partial or empty run
             sys.exit(f'locked2: {len(rows)} of {len(locked)} locked questions found (manifest missing or wrong --pattern); nothing scored')
     else:
-        rows = [r for r in load_real(a.pattern) if (not a.split or split_of(r) == a.split) and qhash(r) not in locked][:a.limit]
+        rows = [r for r in load_real(a.pattern) if (not a.split or split_of(r) == a.split) and qhash(r) not in locked][a.start:][:a.limit]
     from kinlogic.codes import _fits
     chk = (lambda lf: _fits(lf) is not None) if a.check else None
     gen = lambda b, m=model, v=vocab, **kw: generate(m, v, b, dev, max_new=a.max_new, reserve=a.reserve, **kw)
