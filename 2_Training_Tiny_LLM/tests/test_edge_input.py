@@ -55,3 +55,13 @@ def test_name_clash_counts_genders_against_clear_names():
     assert exam._name_clashes('@0 sibling @1 ; @4 only son @0 ; ask @4 @0', pri) == 1   # "Barkha" made a son
     assert exam._name_clashes('@0 male ; @2 daughter @1', pri) == 2
     assert exam._name_clashes('@4 has 1 son ; @2 not son @0 ; @2 daughter @0', pri) == 0
+
+
+def test_unnamed_chains_use_the_fewest_kin_words():
+    from kinlogic.kin import name_moves
+    label = lambda *mv: name_moves(list(mv))['label']
+    assert label(('S', 'F'), ('U', 'M'), ('U', None), ('D', 'F')) == "father-in-law's sister"
+    assert label(('U', 'M'), ('D', 'M'), ('D', 'M'), ('S', 'F')) == "nephew's wife"
+    assert label(('U', 'F'), ('U', None), ('D', 'M'), ('D', 'M'), ('S', 'F')) == "maternal cousin's wife"
+    assert label(('D', 'M'), ('S', 'F'), ('U', 'F')) == "daughter-in-law's mother"
+    assert name_moves([('S', 'F'), ('U', 'M'), ('U', None), ('D', 'F')])['desc'] == "wife's father's sister"   # steps stay literal

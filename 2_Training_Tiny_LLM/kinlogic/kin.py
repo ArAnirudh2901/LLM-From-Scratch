@@ -112,6 +112,25 @@ def describe(moves) -> str:
     return "'s ".join(words)
 
 
+def compact(moves) -> str:
+    """A path English has no one word for, in the fewest named pieces: "wife's father's sister" -> "father-in-law's
+    sister", "brother's son's wife" -> "nephew's wife", "mother's brother's son's wife" -> "cousin's wife". Ties take
+    the longest first piece; an up-then-down step (a sibling) is never split; pieces "by marriage" only stand alone."""
+    n = len(moves)
+    best = [None] * n + [(0, [])]
+    for i in range(n - 1, -1, -1):
+        for j in range(n, i, -1):   # longest first piece first: kept on ties
+            if (i, j) == (0, n) or (j < n and moves[j - 1][0] == 'U' and moves[j][0] == 'D') or best[j] is None:
+                continue
+            r = name_moves(moves[i:j], spell=False) if j - i > 1 else None   # pieces need their one word only
+            if r and (r['key'] in ('path', 'self') or r['note']):
+                continue
+            word = (r['label'] if i == 0 else r['base']) if r else describe(moves[i:j])
+            if best[i] is None or 1 + best[j][0] < best[i][0]:
+                best[i] = (1 + best[j][0], [word] + best[j][1])
+    return "'s ".join(best[0][1]) if best[0] else describe(moves)
+
+
 # Hindi kinship words, matched on the path signature ("UF U? DM": mother's brother).
 HINDI = [(re.compile(p), w) for p, w in [
     (r'^UM$', 'pita'), (r'^UF$', 'maa'), (r'^DM$', 'beta'), (r'^DF$', 'beti'), (r'^SM$', 'pati'), (r'^SF$', 'patni'),
@@ -131,7 +150,7 @@ HINDI = [(re.compile(p), w) for p, w in [
 ]]
 
 
-def name_moves(moves) -> dict:
+def name_moves(moves, spell: bool = True) -> dict:
     """Names the relative reached by `moves`, a shortest path from A to B ([(m, g)], g = gender reached).
 
     Returns {key, side, label, desc, hindi, note, gender}: key is the English word ("uncle"; 'path' when English
@@ -207,7 +226,7 @@ def name_moves(moves) -> dict:
         elif u == 1 and d == 1:
             word = _by(g_b, 'co-brother', 'co-sister', 'co-sibling')
     side = _by(moves[0][1], 'paternal', 'maternal', None) if sided and not lead and u >= 2 else None
-    base = word or desc
+    base = word or (compact(moves) if spell else desc)
     label = ' '.join(x for x in (side, base) if x) + (f' ({note})' if note else '')
     if hindi and hindi.endswith('era'):
         hindi += _by(g_b, ' bhai', ' behen', ' bhai or behen')
