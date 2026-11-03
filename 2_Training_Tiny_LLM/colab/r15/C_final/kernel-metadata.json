@@ -1,0 +1,17 @@
+{
+ "id": "aranirudh/kinthread-r15-c-final",
+ "title": "kinthread-r15-c-final",
+ "code_file": "notebook.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": true,
+ "enable_gpu": true,
+ "enable_internet": true,
+ "dataset_sources": [
+  "aranirudh/kinthread-real-questions"
+ ],
+ "kernel_sources": [
+  "aranirudh/kinthread-r13-c-twins"
+ ],
+ "competition_sources": []
+}
