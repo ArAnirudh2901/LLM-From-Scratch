@@ -10,7 +10,7 @@ pyflakes_api = pytest.importorskip('pyflakes.api')
 from pyflakes.messages import UndefinedName  # noqa: E402
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NOTEBOOKS = sorted(glob.glob(os.path.join(HERE, 'colab/r*/*/notebook.ipynb')))
+NOTEBOOKS = sorted(glob.glob(os.path.join(HERE, 'colab/r*/*/notebook.ipynb')) + glob.glob(os.path.join(HERE, 'colab/r*/*_colab.ipynb')))
 
 
 class Collect:

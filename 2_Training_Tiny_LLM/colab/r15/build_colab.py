@@ -27,9 +27,9 @@ R = '/content/km'
 if not os.path.isdir(R):
     sh(f'git clone -q --depth 1 https://github.com/ArAnirudh2901/Kinthread-llm-model {R}')
 os.chdir(R)
-if not os.path.exists('runs/v10-r13-final/best.pt'):
+if subprocess.run('cd runs/v10-r13-final && sha256sum -c --quiet best.pt.sha256', shell=True).returncode:   # missing or partial
     sh('cat runs/v10-r13-final/best.pt.part-* > runs/v10-r13-final/best.pt')
-sh('cd runs/v10-r13-final && sha256sum -c best.pt.sha256')
+    sh('cd runs/v10-r13-final && sha256sum -c best.pt.sha256')
 sh('pip -q install -U gdown')
 S = '/content/share'
 os.makedirs(S, exist_ok=True)
@@ -66,8 +66,14 @@ steps = [(f'{OUT}/r15_verifier.json', f'python train_verifier.py --ckpt {B} --n 
          (f'{OUT}/compare_final.json', f'python -m eval.compare_runs private/r8p_dev_final.json {OUT}/r15_dev_final.json --out {OUT}/compare_final.json'),
          (f'{OUT}/r15_consistency.json', f'python -m eval.consistency --groups 300 --ckpt {B} --k 16 --out {OUT}/r15_consistency.json'),
          (f'{OUT}/r15_gauntlet.json', f'python -m eval.gauntlet --ckpt {B} --k 16 --out {OUT}/r15_gauntlet.json')]
-for out, cmd in steps:   # finished steps are skipped after a reconnect
-    if not os.path.exists(out):
+def finished(path):   # a file cut off by a dropped session is redone, not skipped
+    try:
+        json.load(open(path))
+        return True
+    except (OSError, ValueError):
+        return False
+for out, cmd in steps:
+    if not finished(out):
         sh(cmd)
 cmp = json.load(open(f'{OUT}/compare_final.json'))
 g, c = json.load(open(f'{OUT}/r15_gauntlet.json')), json.load(open(f'{OUT}/r15_consistency.json'))

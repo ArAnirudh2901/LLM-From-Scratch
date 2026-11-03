@@ -32,6 +32,16 @@ NUM = {0: 'no', 1: 'one', 2: 'two', 3: 'three', 4: 'four'}
 PLURAL = {'son': 'sons', 'daughter': 'daughters', 'brother': 'brothers', 'sister': 'sisters', 'child': 'children'}
 
 
+def _a(word):
+    return 'an' if word[0] in 'aeiou' else 'a'   # "an uncle", "an aunt"
+
+
+def _plural(rel):
+    if rel.endswith('-in-law'):
+        return rel.replace('-in-law', 's-in-law')   # brothers-in-law
+    return PLURAL.get(rel, rel + 's')
+
+
 def _answers(r):
     return [sorted(a['key'] for a in q['answers']) for q in r.get('questions', [])]
 
@@ -89,10 +99,8 @@ def has_sentences(r, people, rng):
                 out.append((toks, [f'{x} has 0 {rel}']))
                 break
             if rel != 'child' and n >= 1 and rng.random() < 0.4:
-                toks = [x, 'has', 'only' if n == 1 and rng.random() < 0.5 else _num(n, rng), *(['one'] if False else []),
-                        rel if n == 1 else PLURAL[rel], '.']
-                if toks[2] == 'only':
-                    toks = [x, 'has', 'only', 'one', rel, '.']
+                toks = ([x, 'has', 'only', 'one', rel, '.'] if n == 1 and rng.random() < 0.5
+                        else [x, 'has', _num(n, rng), rel if n == 1 else PLURAL[rel], '.'])
                 out.append((toks, [f'{x} has {n} {rel}']))
                 break
         if len(out) >= 2 or (out and rng.random() < 0.6):   # mostly one: negations are the easiest true fact to find
@@ -117,9 +125,9 @@ def coord_sentence(r, people, rng):
         (r1, y), (r2, z) = got[:2]
         if r1 == r2:   # "has two sisters" states the count too (the generator's convention): only when it is proved
             if _always(r, f'{x} has 2 {r1}'):
-                return [x, 'has', 'two', r1 + 's', ',', y, 'and', z, '.'], [f'{x} has 2 {r1}', f'{x} {r1} {y}', f'{x} {r1} {z}']
-            return [y, 'and', z, 'are', 'both', x, "'s", r1 + 's', '.'], [f'{x} {r1} {y}', f'{x} {r1} {z}']
-        return [x, 'has', 'a', r1, 'and', 'a', r2, ',', y, 'and', z, ',', 'respectively', '.'], [f'{x} {r1} {y}', f'{x} {r2} {z}']
+                return [x, 'has', 'two', _plural(r1), ',', y, 'and', z, '.'], [f'{x} has 2 {r1}', f'{x} {r1} {y}', f'{x} {r1} {z}']
+            return [y, 'and', z, 'are', 'both', x, "'s", _plural(r1), '.'], [f'{x} {r1} {y}', f'{x} {r1} {z}']
+        return [x, 'has', _a(r1), r1, 'and', _a(r2), r2, ',', y, 'and', z, ',', 'respectively', '.'], [f'{x} {r1} {y}', f'{x} {r2} {z}']
     inv = collections.defaultdict(list)   # (rel, x) -> [y]: x is y's rel
     for y, lst in rel_of.items():
         for rel, x in lst:
@@ -148,7 +156,7 @@ def gender_sentence(r, people, rng):
     return None
 
 
-def coordinate(tokens, rng):
+def coordinate(tokens):
     """'@0 is the brother of @1 . @0 is the brother of @2 .' -> '@0 is the brother of @1 and @2 .' (facts unchanged)."""
     s = ' '.join(tokens)
     pat = re.compile(r'(@\d+) is the ([a-z-]+) of (@\d+) \. \1 is the \2 of (@\d+) \.')
@@ -183,7 +191,7 @@ def augment(ex, rng):
         else:
             adds.append((toks, facts))
             used.append('gender')
-    co = coordinate(body, rng) if rng.random() < 0.7 else None
+    co = coordinate(body) if rng.random() < 0.7 else None
     if co:
         body = co
         used.append('coordination')
@@ -197,8 +205,8 @@ def augment(ex, rng):
     segs = [x.strip() for x in lf.split(';')]
     at = next((i for i, x in enumerate(segs) if QUESTION.match(x)), len(segs))
     new_lf = ' ; '.join(segs[:at] + new_facts + segs[at:])
-    r2 = _solve(new_lf, people)
-    if r2 is None or _answers(r2) != base:
+    r2 = _solve(new_lf, people)   # implied: same answers and not one possible family removed (a count can miss open genders)
+    if r2 is None or _answers(r2) != base or len(r2.get('worlds', [])) != len(r['worlds']):
         return None
     new_tokens = body + [t for a, _ in adds for t in a] + question
     return {'kind': 'hard-' + ex['kind'], 'tokens': new_tokens, 'lf': new_lf, 'text': ' '.join(new_tokens),
