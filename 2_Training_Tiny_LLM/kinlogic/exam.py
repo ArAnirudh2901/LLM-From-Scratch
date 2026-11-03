@@ -169,24 +169,32 @@ CORE_REPAIR = os.environ.get('KIN_CORE_REPAIR', '0') == '1'   # every reading co
 LEVER = os.environ.get('KIN_LEVER', '0') == '1'   # verifier probability times the reader's weight (LEVER), not instead of it
 KEEP_FIRST = os.environ.get('KIN_KEEP_FIRST', '0') == '1'   # adaptive re-read that fails (no family, nothing asked) keeps the first answer
 TRACE_POW = float(os.environ.get('KIN_TRACE_POW', '0'))   # vote weight times traceability ** TRACE_POW (0: off)
+NAME_CLASH = float(os.environ.get('KIN_NAME_CLASH', '1'))   # vote weight times this per named person a reading makes the gender its clear name is not (1: off)
+# Website guards (off for exam scoring): a text with no family word, step/half/god/foster relations the engine cannot
+# model, and statements the exact reader finds contradictory get an honest "no answer" instead of a guess
+GUARDS = os.environ.get('KIN_GUARDS', '0') == '1'
+UNMODELLED = re.compile(r"\b(?:step|half|god|foster)[- ]?(?:father|mother|parent|son|daughter|child|children|brother|sister"
+                        r"|sibling|dad|mom|mum)s?\b", re.I)
+FAMILY_EXTRA = {'married', 'marry', 'marries', 'wed', 'widow', 'widower', 'twin', 'twins', 'children', 'parents', 'siblings', 'couple'}
 
 
-def answer(text: str, read, priors: dict | None = None) -> dict:
-    """Never raises: a failure comes back as status 'error' with the reason."""
+def answer(text: str, read, priors: dict | None = None, names: list[str] | None = None) -> dict:
+    """Never raises: a failure comes back as status 'error' with the reason. names: extra people (prepare(names=)), e.g.
+    the website's picked pair, so a name only the user marked ("RAJU", "Will") stays a person here too."""
     try:
-        return _answer(text, read, priors)
+        return _answer(text, read, priors, names)
     except Exception as e:   # one odd question must not stop a batch or the page
         return {'answer': 'error', 'option': None, 'status': 'error', 'explanation': f'{type(e).__name__}: {e}', 'facts': ''}
 
 
-def answer_adaptive(text: str, read, read_more, threshold: float = 0.6, priors: dict | None = None) -> dict:
+def answer_adaptive(text: str, read, read_more, threshold: float = 0.6, priors: dict | None = None, names: list[str] | None = None) -> dict:
     """More readings only where the first ones disagree (test-time compute where it is needed, Snell et al. 2024):
     answer with `read`; when the winning option holds less than `threshold` of the vote or nothing fits, answer again
     with `read_more` (a wider beam plus samples)."""
-    first = answer(text, read, priors)
+    first = answer(text, read, priors, names)
     if first.get('status') not in ('error', 'none', 'contradiction') and first.get('confidence', 1.0) >= threshold:
         return first
-    second = answer(text, read_more, priors)
+    second = answer(text, read_more, priors, names)
     bad = ('error', 'none', 'contradiction') if KEEP_FIRST else ('error',)
     return second if second.get('status') not in bad else first
 
@@ -234,10 +242,10 @@ def _verifier():
 _SOLVED = {}   # (question, reading) -> engine result: batched rounds (eval/batched.py) re-run questions
 
 
-def candidates(text: str, read, priors: dict | None = None):
+def candidates(text: str, read, priors: dict | None = None, names: list[str] | None = None):
     """(prepared question, [(engine result, reader score)]) for every reading."""
     from .codes import with_codes
-    p = prepare(text)
+    p = prepare(text, names=names)
     read = with_codes(read, p)   # coded questions are read exactly; the model reads the rest
     got = read([p['tokens']])[0]
     readings = [(got, 0.0)] if isinstance(got, str) else [(g, 0.0) if isinstance(g, str) else (g[0], g[1]) for g in got]
@@ -245,9 +253,9 @@ def candidates(text: str, read, priors: dict | None = None):
     solved = _SOLVED if priors is None else {}
     flags = (NAMES_DECIDE, NEAREST, INVERSE, RELAX, DESC_UNNAMED, SMALLEST, CLOSURE)   # what solving one reading reads
     for k, (lf, score) in enumerate(readings):
-        lf = (text, lf, flags)
+        lf = (text, tuple(names or ()), lf, flags)
         if lf not in solved:
-            f = lf[1]
+            f = lf[2]
             try:
                 res = _answer_one(p, f, read, priors)
                 if CLOSURE:
@@ -274,6 +282,8 @@ def _closure(p, lf, read, priors, res):
         return res
     stmts = [s.strip() for s in lf.split(';') if s.strip()]
     named = len({t for t in p['tokens'] if re.fullmatch(r'@\d+', t)})
+    if named > 12:   # exam puzzles name at most ~10; a long story as one closed family explodes the search
+        return res
     q = [s for s in stmts if s.split()[0] in QFACTS]
     alt = ' ; '.join([s for s in stmts if s not in q] + [f'members {named}'] + q)
     got = _answer_one(p, alt, read, priors)
@@ -348,12 +358,56 @@ def _plain_question(p) -> bool:
     return not p['options'] and not CLAIM_CUE.search(p['question'].lower())
 
 
-def _answer(text: str, read, priors: dict | None = None) -> dict:
+_MALE = ('son', 'brother', 'father', 'husband', 'nephew', 'uncle', 'grandson', 'grandfather', 'male')
+_FEMALE = ('daughter', 'sister', 'mother', 'wife', 'niece', 'aunt', 'granddaughter', 'grandmother', 'female')
+
+
+def _word_gender(w: str):
+    w = re.sub(r'^(?:great-)*|-in-law$', '', w)
+    return 'M' if w in _MALE else 'F' if w in _FEMALE else None
+
+
+def _name_clashes(lf: str, priors) -> int:
+    """Named people a reading makes male or female against their name's clear gender ('X male', 'Y son X')."""
+    out = set()
+    for st in lf.split(';'):
+        w = st.split()
+        if len(w) < 2 or w[0] in QFACTS or 'not' in w:
+            continue
+        who, g = (w[0], _word_gender(w[1])) if len(w) == 2 else (w[-1], _word_gender(w[-2]))
+        if g and re.fullmatch(r'@\d+', who) and (priors or {}).get(who) in ('M', 'F') and priors[who] != g:
+            out.add(who)
+    return len(out)
+
+
+def _guard(text: str, read, priors, names=None) -> dict | None:
+    """GUARDS: a result for a question the engine cannot answer honestly, else None."""
+    from .kin import KIN
+    from .rules import read as read_rules
+    p = prepare(text, names=names)
+    none = lambda why: {'answer': 'no answer', 'option': None, 'status': 'none', 'confidence': 0.0, 'facts': '', 'explanation': why}
+    m = UNMODELLED.search(text)
+    if m:
+        return none(f"'{m.group(0)}' relations are not modelled yet: only blood relations, marriages and in-laws are.")
+    if not any(t in KIN or t.rstrip('s') in KIN or t in FAMILY_EXTRA for t in p['tokens']):
+        return none('The text states no family relation.')
+    exact = read_rules(p['tokens'])
+    if exact and _answer_one(p, exact, read, priors).get('status') == 'contradiction':
+        return {'answer': 'contradiction', 'option': None, 'status': 'contradiction', 'confidence': 0.0, 'facts': exact,
+                'explanation': 'The statements contradict each other.'}
+    return None
+
+
+def _answer(text: str, read, priors: dict | None = None, names: list[str] | None = None) -> dict:
     """read may return one reading per question or several, best first, optionally with scores (mean log-probability
     per token). Every reading is solved; readings that fail (contradiction, no question) drop out; the rest vote for
     their option, weighted by the reader's confidence. confidence: the winning option's share of the votes."""
     import math
-    p, results = candidates(text, read, priors)
+    if GUARDS:
+        stop = _guard(text, read, priors, names)
+        if stop:
+            return stop
+    p, results = candidates(text, read, priors, names)
     good = [(r, sc) for r, sc in results if r['status'] not in ('error', 'contradiction', 'none')]
     if good and _plain_question(p):   # "how is X related to Y?" has no statements to check: a claim reading is a misreading
         kept = [(r, sc) for r, sc in good if r['status'] not in ('claims', 'sufficiency')]
@@ -382,6 +436,9 @@ def _answer(text: str, read, priors: dict | None = None) -> dict:
     if COVER:   # a reading that leaves a named person of the question out has likely dropped a sentence
         people = {t for t in p['tokens'] if re.fullmatch(r'@\d+', t)}
         weights = [wt * 0.35 ** len(people - set(re.findall(r'@\d+', r.get('facts') or ''))) for (r, _), wt in zip(good, weights)]
+    if NAME_CLASH < 1:   # "@4 only son @0" for a Barkha: a sentence about someone else attached to her
+        pri = priors if priors is not None else name_priors(p['ents'])
+        weights = [wt * NAME_CLASH ** _name_clashes(r.get('facts') or '', pri) for (r, _), wt in zip(good, weights)]
     votes = {}
     for (r, _), wt in zip(good, weights):
         key = r['option'] if p['options'] else r['answer']

@@ -67,13 +67,13 @@ class Tracer:
         return read
 
     def _candidates_hook(self, orig):
-        def candidates(text, read, priors=None):
+        def candidates(text, read, priors=None, names=None):
             calls = []
 
             def model(batch):   # exam.candidates only calls the model when no exact reader took the question
                 calls.append(len(batch))
                 return read(batch)
-            p, results = orig(text, model, priors)
+            p, results = orig(text, model, priors, names)
             toks = tuple(p['tokens'])
             seen = self._exact.get(toks)
             (self._shadow_passes if self._off else self._passes).append({

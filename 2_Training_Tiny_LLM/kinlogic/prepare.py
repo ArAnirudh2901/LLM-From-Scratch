@@ -9,6 +9,7 @@ Returns tokens (lowercase words and placeholders), the placeholder table, and th
 """
 from __future__ import annotations
 
+import html
 import re
 import unicodedata
 from pathlib import Path
@@ -78,7 +79,25 @@ ADJ = {'old', 'young', 'elderly', 'little', 'small', 'tall', 'certain', 'unknown
 DET_NEW = {'a', 'an', 'another', 'one', 'some'}
 DET_BACK = {'the', 'this', 'that'}
 
-TOKEN_RE = re.compile(r"'s\b|\w+(?:-\w+)*|[^\w\s]")
+
+
+def _mark_ranges() -> str:
+    """Combining marks as a character-class body: Python's \\w leaves them out, which splits "राजु" or "José" typed
+    with a separate accent."""
+    cps = [c for c in range(0x300, 0x10000) if unicodedata.category(chr(c)).startswith('M')]
+    out, start = [], cps[0]
+    for a, b in zip(cps, cps[1:] + [None]):
+        if b != a + 1:
+            out.append(f'\\u{start:04x}' if start == a else f'\\u{start:04x}-\\u{a:04x}')
+            start = b
+    return ''.join(out)
+
+
+MARKS = _mark_ranges()
+_W = rf'[\w{MARKS}]'
+# name prefixes "O'Brien", "D'Souza" stay one word; "Ravi's" is "Ravi" + "'s" and a page's "I'G" two letters
+TOKEN_RE = re.compile(rf"'s\b|(?:\b[ODLN]'(?=[A-Z][a-z]))?{_W}+(?:-{_W}+)*|[^\w\s]")
+NAME_RE = re.compile(rf"[^\W\d_](?:[^\W\d_]|[{MARKS}]|-|'(?=[^\W\d_]))*")
 _OPTION_START = re.compile(r'(?:^|\s)(?:\(\s*([a-eA-E1-5])\s*\)|([a-eA-E1-5])[.)](?=\s|\S))')
 _BOILER = [re.compile(p, re.I) for p in (
     r'^\s*(?:blood relations?\s+)?(?:question|q|que|ques)\s*\.?\s*\d+\s*[:.)-]\s*',
@@ -102,6 +121,44 @@ TYPOS = [(r'\bneice(s?)\b', r'niece\1'), (r'\bnefew(s?)\b', r'nephew\1'), (r'\bn
          (r'\b(father|mother|son|daughter|brother|sister)\s?in\s?law\b', r'\1-in-law'), (r'\bcousion(s?)\b', r'cousin\1')]
 
 
+def _one_edit(a: str, b: str) -> bool:
+    """Damerau distance exactly 1: one letter changed, added, dropped, or two neighbours swapped."""
+    if a == b or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        d = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(d) == 1 or (len(d) == 2 and d[1] == d[0] + 1 and a[d[0]] == b[d[1]] and a[d[1]] == b[d[0]])
+    s, t = (a, b) if len(a) < len(b) else (b, a)
+    i = next((k for k in range(len(s)) if s[k] != t[k]), len(s))
+    return s[i:] == t[i + 1:]
+
+
+_KIN_WORDS = None
+# real words one edit from a relation word ("brothel", "other", "piece"): never corrected
+_NOT_TYPOS = set("""aint arent bather bother brothel bunt chid chill chili chile daunt espouse farther fatter feather fife
+gather gaunt haunt hunt jaunt lather laughter life lister mister nice other patent piece punt rather rife runt sidling
+sifter sinter sitter smother souse taunt vaunt wide wile wine wipe wire wise""".split())
+
+
+def fix_kin_typos(text: str) -> str:
+    """'brohter' -> 'brother', 'neice' -> 'niece': a lowercase word in a relation slot ('the/his/'s _', '_ of/to') that is
+    one edit from exactly one relation word (4+ letters). Real words, plurals and capitalised words (names) are kept."""
+    global _KIN_WORDS
+    if _KIN_WORDS is None:
+        from .kin import KIN
+        _KIN_WORDS = sorted(w for w in KIN if re.fullmatch(r'[a-z]+(?:-in-law)?', w) and len(w) >= 4)
+
+    def fix(m):
+        w = m.group(2)
+        if w in _NOT_TYPOS or w in _KIN_WORDS or (w.endswith('s') and w[:-1] in _KIN_WORDS):
+            return m.group(0)
+        near = [k for k in _KIN_WORDS if _one_edit(w, k)]
+        return m.group(1) + near[0] if len(near) == 1 else m.group(0)
+    slot = r"(\b(?i:the|a|an|his|her|my|your|their|our|whose|only|is)\s+|'s\s+)([a-z]{4,}(?:-in-law)?)\b(?!-)"
+    text = re.sub(slot, fix, text)
+    return re.sub(r"(\b)([a-z]{4,}(?:-in-law)?)(?=\s+(?:of|to)\b)", fix, text)
+
+
 def normalize(text: str) -> str:
     if re.search(r'â€|Ã.', text):   # UTF-8 read as Windows-1252 ("A â€“ B"): undo it
         try:
@@ -109,6 +166,10 @@ def normalize(text: str) -> str:
         except (UnicodeEncodeError, UnicodeDecodeError):
             text = text.replace('â€“', '-').replace('â€”', '-').replace('â€™', "'").replace('â€˜', "'").replace('â€œ', '"').replace('â€\x9d', '"')
     text = unicodedata.normalize('NFKC', text).replace('\x9d', '')   # stray mojibake byte
+    text = re.sub(r'</?(?:b|i|u|s|em|strong|p|br|hr|div|span|a|li|ul|ol|h[1-6]|sup|sub|font|small|mark|code|pre|td|th|tr)\b'
+                  r'''(?:\s+[a-z-]+(?:=(?:"[^"]*"|'[^']*'|[^\s<>]+))?)*\s*/?>''', ' ', text)   # pasted HTML; "A <B" codes are not tags
+    text = re.sub(r'&(?:#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);', lambda m: html.unescape(m.group(0)), text)
+    text = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)   # zero-width, bidi and control marks
     for a, b in (('‘', "'"), ('’', "'"), ('`', "'"), ('“', '"'), ('”', '"'), ('–', '-'), ('—', '-'),
                  ('−', '-'), ('…', '...'), (' ', ' ')):
         text = text.replace(a, b)
@@ -120,11 +181,13 @@ def normalize(text: str) -> str:
     text = re.sub(r'\b(of|is|to)([A-Z])\b', r'\1 \2', text)   # "daughter ofZ"
     text = re.sub(r'\b([A-Z])\.([A-Z]) (?=is |was |has )', r'\1. \2 ', text)   # "grandfather of U.Q is the brother"
     text = re.sub(r"\b(mother|father|brother|sister|son|daughter|wife|husband)s's\b", r"\1's", text)   # "mothers's"
+    text = re.sub(rf"\b([A-Z]\w*s)'\s+(?=(?:{REL_WORD})\b)", r"\1's ", text)   # "James' son"
     text = re.sub(rf"\b(my|his|her|their|our|your)\.\s+(?={REL_WORD})", r'\1 ', text, flags=re.I)   # "my. wife": a stray page period
     text = re.sub(r'\baunty\b', 'aunt', text, flags=re.I)
     text = re.sub(r"([a-z])\s?\?\s?s\b(?=\s+[a-z])", r"\1's", text)   # "son?s uncle": a lost apostrophe
     for a, b in TYPOS:   # common page misspellings of relation words
         text = re.sub(a, b, text, flags=re.I)
+    text = fix_kin_typos(text)
     if re.search(r'\bmeans?\b', text):   # digit code symbols glued to letters: "P5Q", "F3M5N3K"
         for _ in range(4):
             text = re.sub(r'(?<![A-Za-z0-9])([A-Z])(\d)(?=[A-Z](?![a-z]))', r'\1 \2 ', text)
@@ -263,6 +326,27 @@ def informal(text: str) -> str:
             t = t.rstrip(' .') + '?'
     return t
 
+NOT_PERSON = set("""he she it they we you i this that these those who whom whose what which there here one someone somebody
+anyone anybody everyone everybody nobody none each both all either neither another other his her their my your our its
+the a an how mr mrs ms dr""".split())
+
+
+def _kin_word(w: str) -> bool:
+    return w in KIN_TITLES or (w.endswith('s') and w[:-1] in KIN_TITLES)
+
+
+def _person_slot(raw, i) -> bool:
+    """A capitalised word where only a person fits: 'the brother of May', 'Will is the son of', 'Hope's son'."""
+    low = [w.lower() for w in raw]
+    if i and low[i - 1] in ('the', 'a', 'an', 'this', 'that', 'his', 'her', 'their', 'my', 'your', 'our', 'its', 'whose'):
+        return False   # "the Lawyer's wife": a description, not a name
+    if i >= 2 and low[i - 1] == 'of' and _kin_word(low[i - 2]):
+        return True
+    if i + 1 < len(raw) and low[i + 1] in ('is', 'was') and any(_kin_word(w) for w in low[i + 2:i + 5]) and 'of' in low[i + 2:i + 6]:
+        return True
+    return i + 2 < len(raw) and low[i + 1] == "'s" and _kin_word(low[i + 2])
+
+
 def prepare(text: str, names: list[str] | None = None) -> dict:
     """Model input for a pasted question. names: extra strings to treat as people (the user's "add a name").
     Returns {tokens, ents: [{id, text, kind}], options, question}."""
@@ -315,7 +399,7 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
                 kind = 'letter'
         elif low in extra:
             kind = 'name'
-        elif re.fullmatch(r'[A-Za-z][A-Za-z-]*', t) and len(t) > 1 and low not in COMMON and not (t.isupper() and len(t) <= 6 and low not in extra):
+        elif NAME_RE.fullmatch(t) and len(t) > 1 and low not in COMMON and not (t.isupper() and len(t) <= 6 and low not in extra):
             kin_word = low in KIN_TITLES or (low.endswith('s') and low[:-1] in KIN_TITLES)   # "Brothers and Sisters"
             if t[0].isupper() and kin_word:
                 pass
@@ -329,6 +413,8 @@ def prepare(text: str, names: list[str] | None = None) -> dict:
                     kind = 'name'
             elif lowercase_text and low not in LEXICON and low not in KIN_TITLES:
                 kind = 'name'
+        if not kind and t[:1].isupper() and len(t) > 1 and low not in NOT_PERSON and not _kin_word(low) and NAME_RE.fullmatch(t) and (low in by_text or _person_slot(raw, i)):
+            kind = 'name'   # an English word used as a name: "Will is the brother of May"
         if kind:
             e = ent(t if kind == 'letter' else low, t, kind)
             out.append(e or '<unk>')
